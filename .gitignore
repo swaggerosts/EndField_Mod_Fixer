@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+build/
+dist/
+release/
+release_slim/
+build_onefile/
+build_onefile_slim/
+*.spec
+
+admin_uploader/
+.env
+config.json
+*.log
