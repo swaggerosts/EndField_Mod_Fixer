@@ -32,8 +32,8 @@ except ImportError:
 import Endfield_mod_fixer_v1_0 as fixer
 import rabbitfx_ps_t_converter as stable_texture_converter
 
-APP_VERSION = "1.0.0"
-APP_TITLE = "Endfield mods fixer v1.0"
+APP_VERSION = "1.3.0"
+APP_TITLE = "Endfield mods fixer v1.3"
 APP_FONT_FAMILY = "猫啃什锦黑"
 APP_FONT_FILE = Path("MaoKenShiJinHei") / "MaoKenShiJinHei-2.ttf"
 UI_FONT_FAMILY = APP_FONT_FAMILY
@@ -52,13 +52,16 @@ MIN_COLLAPSED_WINDOW_HEIGHT = 620
 COLLAPSED_BOTTOM_PADDING = 8
 EXPANDED_WINDOW_HEIGHT = 770
 DEFAULT_LOG_AREA_HEIGHT = 220
+LOG_AREA_TOP_GAP = 8
 LANGUAGE_FADE_FRAMES = 9
 LANGUAGE_FADE_INTERVAL_MS = 16
 LANGUAGE_FADE_PANEL_TARGET = 0.92
 CONTOUR_REDRAW_DELAY_MS = 180
 PANEL_REDRAW_DELAY_MS = 32
-LOG_ANIMATION_FRAMES = 9
-LOG_ANIMATION_INTERVAL_MS = 18
+LOG_ANIMATION_DURATION_MS = 220
+LOG_ANIMATION_INTERVAL_MS = 4
+LOG_ANIMATION_TIMER_RESOLUTION_MS = 1
+LOG_ANIMATION_SLIDE_OFFSET = 28
 ROOT_RESIZE_SYNC_DELAY_MS = 45
 CONTOUR_TOP_OFFSET = 42
 CONTOUR_SOURCE_IMAGE_NAME = "\u65e0\u7f1d\u5730\u5f62\u7b49\u9ad8\u7ebf_\u7231\u7ed9\u7f51_aigei_com.png"
@@ -79,6 +82,17 @@ def app_base_dir() -> Path:
 APP_DIR = app_base_dir()
 UPDATE_DIR = APP_DIR / "updates"
 APP_ICON_NAME = "favicon.ico"
+STRIP_CYAN = "#00ffff"
+STRIP_MAGENTA = "#ff00ff"
+STRIP_YELLOW = "#ffff00"
+ROLLBACK_CYAN = "#0aebeb"
+ROLLBACK_MAGENTA = "#eb0aeb"
+ROLLBACK_YELLOW = "#ebeb0a"
+ROLLBACK_BUTTON_TEXT = "#3F3F3D"
+LOG_SWITCH_ON_YELLOW = "#e1e100"
+LOG_SWITCH_KNOB_ON = "#252b30"
+ROLLBACK_WINDOW_BASE_WIDTH = 760
+ROLLBACK_WINDOW_BASE_HEIGHT = 430
 FR_PRIVATE = 0x10
 LOADED_FONT_PATHS: set[Path] = set()
 
@@ -191,21 +205,21 @@ THEMES = {
         "border": "#46515a",
         "text": "#f2f4ef",
         "muted": "#aab2b7",
-        "blue": "#c7ec26",
-        "blue_dark": "#a7c918",
-        "check_on": "#c7ec26",
+        "blue": STRIP_YELLOW,
+        "blue_dark": STRIP_YELLOW,
+        "check_on": STRIP_YELLOW,
         "check_mark": "#ffffff",
-        "green": "#c7ec26",
-        "green_dark": "#a7c918",
+        "green": STRIP_YELLOW,
+        "green_dark": STRIP_YELLOW,
         "soft_button": "#22282d",
         "soft_button_active": "#303840",
         "log_bg": "#15191d",
         "log_text": "#ffffff",
         "switch_track": "#2b3136",
-        "switch_knob": "#c7ec26",
+        "switch_knob": STRIP_YELLOW,
         "switch_text": "#f2f4ef",
-        "accent": "#c7ec26",
-        "accent_dim": "#6d8414",
+        "accent": STRIP_YELLOW,
+        "accent_dim": STRIP_YELLOW,
         "card": "#eeefeb",
         "card_2": "#d9dbd5",
         "card_text": "#2a2d2f",
@@ -242,7 +256,7 @@ UI_COPY = {
         "target_title": "目标文件夹",
         "target_sub": "",
         "choose_mod": "选择 Mod 文件夹",
-        "target_hint": "将选择包含 .ini / .od / .pak 等文件的 Mod 目录",
+        "target_hint": "将选择包含 .ini 文件的 Mod 目录",
         "repair_title": "修复选项",
         "repair_sub": "",
         "stable_texture": "稳定纹理",
@@ -265,6 +279,41 @@ UI_COPY = {
         "export_log": "导出日志",
         "check_update": "检查更新",
         "debug_log": "调试日志",
+        "log_switch_on": "开",
+        "log_switch_off": "关",
+        "update_check_start": "检查更新开始",
+        "update_download_start": "下载更新开始",
+        "update_save_location": "保存位置",
+        "update_current_message": "当前已是最新版本：v{version}",
+        "update_current_log": "检查更新：当前版本 v{local}，最新版本 {remote}。",
+        "update_no_file_log": "检查更新：发现新版本 {remote}，但暂时没有可下载文件。",
+        "update_no_file_message": "发现新版本 {remote}，但暂时没有可下载文件。",
+        "update_available_title": "发现新版本",
+        "update_available_log": "检查更新：发现新版本。",
+        "update_current_version": "当前版本",
+        "update_remote_version": "云端版本",
+        "update_file": "文件",
+        "update_required": "强制更新",
+        "update_notes": "更新说明",
+        "yes": "是",
+        "no": "否",
+        "none": "无",
+        "update_available_prompt": "发现新版本 {remote}。\n\n文件：{asset}\n\n更新说明：\n{notes}\n\n是否选择保存位置并下载？",
+        "update_choose_save_title": "选择更新文件保存位置",
+        "update_file_type": "更新文件",
+        "overwrite_file_title": "覆盖文件",
+        "overwrite_file_message": "文件已存在，是否覆盖？\n{path}",
+        "update_cancel_save": "检查更新：用户取消选择保存位置。",
+        "update_cancel_overwrite": "检查更新：用户取消覆盖已有文件。",
+        "update_cancel_download": "检查更新：用户取消下载。",
+        "update_downloaded_title": "更新已下载",
+        "update_downloaded_log": "检查更新：发现新版本并已下载。",
+        "update_version": "版本",
+        "update_location": "位置",
+        "update_downloaded_message": "新版本 {remote} 已下载到：\n{path}\n\n更新说明：\n{notes}",
+        "update_unknown_status": "检查更新：收到未知更新状态。",
+        "update_error_log": "检查更新失败：{message}",
+        "update_error_title": "检查更新失败",
         "enabled": "启用",
         "disabled": "停用",
         "ready": "终端已就绪，等待操作指令...",
@@ -279,6 +328,10 @@ UI_COPY = {
         "preview_start": "预览扫描开始",
         "rollback_name": "回滚",
         "process_end": "结束，退出码",
+        "fixer_skipped_newer": "已跳过 {count} 个较新版本文件。",
+        "fixer_no_changes": "完成。无需修改。{skipped}",
+        "fixer_dry_run_complete": "预览扫描完成。将修改/删除 {count} 个文件。{skipped} 未创建备份。",
+        "fixer_run_complete": "完成。已修改 {modified} 个文件，已硬删除 {deleted} 个热修复文件。",
         "invalid_target_title": "目标文件夹无效",
         "invalid_target_msg": "请选择一个存在的 Mod 文件夹。",
         "export_done": "导出完成",
@@ -300,7 +353,7 @@ UI_COPY = {
         "target_title": "Target Folder",
         "target_sub": "",
         "choose_mod": "Choose Mod Folder",
-        "target_hint": "Choose the Mod directory containing .ini / .od / .pak files",
+        "target_hint": "Choose the Mod directory containing .ini files",
         "repair_title": "Repair Options",
         "repair_sub": "",
         "stable_texture": "Stable Texture",
@@ -323,6 +376,41 @@ UI_COPY = {
         "export_log": "Export Log",
         "check_update": "Check Update",
         "debug_log": "Debug Log",
+        "log_switch_on": "ON",
+        "log_switch_off": "OFF",
+        "update_check_start": "Update Check Started",
+        "update_download_start": "Update Download Started",
+        "update_save_location": "Save location",
+        "update_current_message": "You are already on the latest version: v{version}",
+        "update_current_log": "Update check: current version v{local}, latest version {remote}.",
+        "update_no_file_log": "Update check: version {remote} is available, but no downloadable file is available yet.",
+        "update_no_file_message": "Version {remote} is available, but no downloadable file is available yet.",
+        "update_available_title": "New Version Available",
+        "update_available_log": "Update check: new version available.",
+        "update_current_version": "Current version",
+        "update_remote_version": "Remote version",
+        "update_file": "File",
+        "update_required": "Required update",
+        "update_notes": "Release notes",
+        "yes": "Yes",
+        "no": "No",
+        "none": "None",
+        "update_available_prompt": "Version {remote} is available.\n\nFile: {asset}\n\nRelease notes:\n{notes}\n\nChoose a save location and download it?",
+        "update_choose_save_title": "Choose Update File Save Location",
+        "update_file_type": "Update file",
+        "overwrite_file_title": "Overwrite File",
+        "overwrite_file_message": "The file already exists. Overwrite it?\n{path}",
+        "update_cancel_save": "Update check: save location selection canceled.",
+        "update_cancel_overwrite": "Update check: overwrite canceled.",
+        "update_cancel_download": "Update check: download canceled.",
+        "update_downloaded_title": "Update Downloaded",
+        "update_downloaded_log": "Update check: new version found and downloaded.",
+        "update_version": "Version",
+        "update_location": "Location",
+        "update_downloaded_message": "Version {remote} has been downloaded to:\n{path}\n\nRelease notes:\n{notes}",
+        "update_unknown_status": "Update check: received an unknown update status.",
+        "update_error_log": "Update check failed: {message}",
+        "update_error_title": "Update Check Failed",
         "enabled": "On",
         "disabled": "Off",
         "ready": "Terminal ready. Waiting for commands...",
@@ -337,6 +425,10 @@ UI_COPY = {
         "preview_start": "Preview Scan started",
         "rollback_name": "Rollback",
         "process_end": "finished, exit code",
+        "fixer_skipped_newer": "Skipped {count} newer-version file(s).",
+        "fixer_no_changes": "Done. No changes needed.{skipped}",
+        "fixer_dry_run_complete": "Preview scan complete. {count} file(s) would be modified/deleted.{skipped} No backup was created.",
+        "fixer_run_complete": "Done. Modified {modified} file(s), hard-deleted {deleted} hotfix file(s).",
         "invalid_target_title": "Invalid Target Folder",
         "invalid_target_msg": "Please choose an existing Mod folder.",
         "export_done": "Export Complete",
@@ -390,6 +482,11 @@ def adjust_color_lightness(value: str, delta: int) -> str:
             max(0, min(255, blue + delta)),
         )
     )
+
+
+def invert_color(value: str) -> str:
+    red, green, blue = hex_to_rgb(value)
+    return rgb_to_hex((255 - red, 255 - green, 255 - blue))
 
 
 def mix_theme(start: dict[str, str], end: dict[str, str], progress: float) -> dict[str, str]:
@@ -1091,6 +1188,24 @@ class TechPanel(tk.Frame):
         self.draw()
 
 
+class SearchHeaderIcon(tk.Canvas):
+    def __init__(self, parent: tk.Widget, colors: dict[str, str]) -> None:
+        super().__init__(parent, width=18, height=18, bg=colors["panel"], highlightthickness=0, bd=0)
+        self.colors = colors
+        self.draw()
+
+    def draw(self) -> None:
+        self.delete("all")
+        accent = self.colors["accent"]
+        self.create_oval(3, 3, 12, 12, outline=accent, width=2)
+        self.create_line(11, 11, 16, 16, fill=accent, width=2)
+
+    def set_colors(self, colors: dict[str, str]) -> None:
+        self.colors = colors
+        self.configure(bg=colors["panel"])
+        self.draw()
+
+
 class TechOptionRow(tk.Frame):
     def __init__(
         self,
@@ -1288,7 +1403,7 @@ class TechTaskCard(tk.Canvas):
         self.delete("all")
         round_rect(self, 2, 2, width - 2, height - 2, 4, fill=card_fill, outline=colors["border"], width=1)
         self.create_rectangle(24, 22, 88, height - 22, fill=colors["panel_2"], outline=colors["border"])
-        self.create_text(56, height // 2, text=self.icon, fill=accent, font=(SYMBOL_FONT_FAMILY, 30, "bold"))
+        self.draw_task_icon(56, height // 2, accent)
         self.create_text(
             116,
             height // 2,
@@ -1305,6 +1420,35 @@ class TechTaskCard(tk.Canvas):
         self.create_oval(cx - 25, cy - 25, cx + 25, cy + 25, outline=colors["muted"], width=1)
         self.create_text(cx - 8, cy, text=self.action, fill=text_fill, font=(UI_FONT_FAMILY, 13))
         self.create_text(cx + 22, cy, text="›", fill=text_fill, font=(UI_FONT_FAMILY, 18))
+
+    def draw_task_icon(self, cx: int, cy: int, fill: str) -> None:
+        if self.icon == "⚡":
+            points = (
+                cx + 6,
+                cy - 27,
+                cx - 17,
+                cy + 0,
+                cx - 3,
+                cy - 1,
+                cx - 10,
+                cy + 27,
+                cx + 17,
+                cy - 5,
+                cx + 2,
+                cy - 4,
+            )
+            self.create_polygon(points, fill=fill, outline="")
+            return
+
+        if self.icon == "⌖":
+            radius = 13
+            self.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, outline=fill, width=4)
+            self.create_line(cx - 20, cy, cx + 20, cy, fill=fill, width=4, capstyle=tk.BUTT)
+            self.create_line(cx, cy - 20, cx, cy + 20, fill=fill, width=4, capstyle=tk.BUTT)
+            self.create_oval(cx - 4, cy - 4, cx + 4, cy + 4, fill=fill, outline="")
+            return
+
+        self.create_text(cx, cy, text=self.icon, fill=fill, font=(SYMBOL_FONT_FAMILY, 30, "bold"))
 
     def configure(self, cnf: object | None = None, **kwargs: object) -> object:
         if cnf:
@@ -1605,17 +1749,19 @@ class LogPowerSwitch(tk.Frame):
         colors = self.app.colors
         self.canvas.delete("all")
         progress = clamp01(self.progress)
-        track_fill = mix_color(colors["switch_track"], colors["accent_dim"], progress)
+        track_fill = mix_color(colors["switch_track"], LOG_SWITCH_ON_YELLOW, progress)
         draw_capsule(self.canvas, 1, 2, 57, 22, fill=track_fill, outline=colors["border"], width=1)
         knob_x = 12 + 32 * progress
-        self.canvas.create_oval(knob_x - 8, 4, knob_x + 8, 20, fill=colors["accent"], outline="")
-        label = "ON" if progress >= 0.5 else "OFF"
+        knob_fill = mix_color(colors["accent"], LOG_SWITCH_KNOB_ON, progress)
+        self.canvas.create_oval(knob_x - 8, 4, knob_x + 8, 20, fill=knob_fill, outline="")
+        label = self.app.tr("log_switch_on") if progress >= 0.5 else self.app.tr("log_switch_off")
         text_x = 22 if progress >= 0.5 else 36
+        text_fill = invert_color(colors["text"]) if progress >= 0.5 else colors["text"]
         self.canvas.create_text(
             text_x,
             12,
             text=label,
-            fill=colors["text"],
+            fill=text_fill,
             font=(UI_FONT_FAMILY, 8),
         )
 
@@ -1992,10 +2138,14 @@ class FixerGui:
         self.action_buttons: list[tk.Widget] = []
         self.main_frame: tk.Frame | None = None
         self.log_box: tk.Text | None = None
+        self.log_shell: TechPanel | None = None
+        self.log_inner: TechPanel | None = None
+        self.log_header: tk.Frame | None = None
         self.log_area: tk.Frame | None = None
         self.log_title_label: tk.Label | None = None
         self.log_toggle: LogPowerSwitch | DisclosureToggle | None = None
         self.update_button: RoundedButton | None = None
+        self.log_default_text: str | None = None
         self.log_expanded = False
         self.log_animating = False
         self.theme_switches: list[ThemeSwitch] = []
@@ -2011,6 +2161,7 @@ class FixerGui:
         self.contour_tile_cache: dict[tuple[str, str, float], object] = {}
         self.contour_photo_refs: dict[int, object] = {}
         self.root_resize_after_id: str | None = None
+        self.log_timer_resolution_active = False
 
         self.build_ui()
         self.root.bind("<Configure>", self.on_root_configure, add="+")
@@ -2084,6 +2235,254 @@ class FixerGui:
     def tr(self, key: str) -> str:
         current = UI_COPY.get(self.language, UI_COPY["zh"])
         return current.get(key, UI_COPY["zh"].get(key, key))
+
+    def default_log_text(self) -> str:
+        return self.default_log_text_for_language(self.language)
+
+    def default_log_text_for_language(self, language: str) -> str:
+        current_language = self.language
+        self.language = language
+        try:
+            return self._default_log_text_for_current_language()
+        finally:
+            self.language = current_language
+
+    def _default_log_text_for_current_language(self) -> str:
+        stable_state = self.tr("enabled") if self.stable_texture.get() else self.tr("disabled")
+        fixmenu_state = self.tr("enabled") if self.fixmenu.get() else self.tr("disabled")
+        return (
+            f"[12:45:10]  {self.tr('ready')}\n"
+            f"[12:45:11]  {self.tr('target_path')}: {self.target_dir.get()}\n"
+            f"[12:45:11]  {self.tr('repair_status')}: {self.tr('stable_texture')} = {stable_state}  |  {self.tr('fix_menu')} = {fixmenu_state}\n"
+            f"[12:45:11]  {self.tr('click_start')}\n"
+        )
+
+    def scroll_log_to_bottom(self, defer: bool = False) -> None:
+        log_box = self.log_box
+        if log_box is None:
+            return
+
+        def align(update_layout: bool = False) -> None:
+            if self.log_box is not log_box:
+                return
+            with contextlib.suppress(tk.TclError):
+                if update_layout:
+                    log_box.update_idletasks()
+                log_box.see("end-1c")
+                log_box.yview_moveto(1.0)
+
+        align()
+        if defer:
+            with contextlib.suppress(tk.TclError):
+                self.root.after_idle(lambda: align(update_layout=True))
+
+    def translate_log_text_for_language(self, text: str) -> str:
+        lines = text.splitlines(keepends=True)
+        if not lines:
+            return text
+        translated_lines: list[str] = []
+        for raw_line in lines:
+            line = raw_line.rstrip("\r\n")
+            ending = raw_line[len(line):]
+            translated_lines.append(self.update_log_line_for_language(line) + ending)
+        return "".join(translated_lines)
+
+    def skipped_log_suffix_for_language(self, count: str | None) -> str:
+        if not count:
+            return ""
+        return f" {self.tr('fixer_skipped_newer').format(count=count.strip())}"
+
+    def chinese_skipped_count(self, text: str) -> str | None:
+        marker = "已跳过 "
+        suffix = " 个较新版本文件"
+        if marker not in text:
+            return None
+        candidate = text.split(marker, 1)[1].split(suffix, 1)[0].strip()
+        return candidate or None
+
+    def english_skipped_count(self, text: str) -> str | None:
+        marker = "Skipped "
+        suffix = " newer-version file(s)"
+        if marker not in text:
+            return None
+        candidate = text.split(marker, 1)[1].split(suffix, 1)[0].strip()
+        return candidate or None
+
+    def process_title_for_language(self, title: str) -> str:
+        title = title.strip()
+        title_keys = ("preview_title", "fix_title", "rollback_name")
+        for language in ("zh", "en"):
+            for key in title_keys:
+                if title == UI_COPY[language][key]:
+                    return self.tr(key)
+        return title
+
+    def translate_process_done_line(self, line: str) -> str:
+        if not (line.startswith("---- ") and line.endswith(" ----")):
+            return line
+        body = line[5:-5]
+        for language in ("zh", "en"):
+            process_end = UI_COPY[language]["process_end"]
+            separators = (f" {process_end}: ", f"{process_end}: ")
+            for separator in separators:
+                if separator in body:
+                    title, code = body.rsplit(separator, 1)
+                    translated_title = self.process_title_for_language(title)
+                    return f"---- {translated_title} {self.tr('process_end')}: {code.strip()} ----"
+        return line
+
+    def translate_fixer_summary_line(self, line: str) -> str:
+        zh_dry_run_prefix = "预览扫描完成。将修改/删除 "
+        zh_dry_run_separator = " 个文件。"
+        if line.startswith(zh_dry_run_prefix):
+            body = line[len(zh_dry_run_prefix):]
+            if zh_dry_run_separator in body:
+                count, remainder = body.split(zh_dry_run_separator, 1)
+                skipped = self.skipped_log_suffix_for_language(self.chinese_skipped_count(remainder))
+                return self.tr("fixer_dry_run_complete").format(count=count.strip(), skipped=skipped)
+
+        en_dry_run_prefix = "Preview scan complete. "
+        en_dry_run_separator = " file(s) would be modified/deleted."
+        if line.startswith(en_dry_run_prefix):
+            body = line[len(en_dry_run_prefix):]
+            if en_dry_run_separator in body:
+                count, remainder = body.split(en_dry_run_separator, 1)
+                skipped = self.skipped_log_suffix_for_language(self.english_skipped_count(remainder))
+                return self.tr("fixer_dry_run_complete").format(count=count.strip(), skipped=skipped)
+
+        zh_no_changes_prefix = "完成。无需修改。"
+        if line.startswith(zh_no_changes_prefix):
+            skipped = self.skipped_log_suffix_for_language(self.chinese_skipped_count(line[len(zh_no_changes_prefix):]))
+            return self.tr("fixer_no_changes").format(skipped=skipped)
+
+        en_no_changes_prefix = "Done. No changes needed."
+        if line.startswith(en_no_changes_prefix):
+            skipped = self.skipped_log_suffix_for_language(self.english_skipped_count(line[len(en_no_changes_prefix):]))
+            return self.tr("fixer_no_changes").format(skipped=skipped)
+
+        zh_run_match = re.match(r"^完成。已修改 (?P<modified>\d+) 个文件，已硬删除 (?P<deleted>\d+) 个热修复文件。$", line)
+        if zh_run_match:
+            return self.tr("fixer_run_complete").format(
+                modified=zh_run_match.group("modified"),
+                deleted=zh_run_match.group("deleted"),
+            )
+
+        en_run_match = re.match(r"^Done\. Modified (?P<modified>\d+) file\(s\), hard-deleted (?P<deleted>\d+) hotfix file\(s\)\.$", line)
+        if en_run_match:
+            return self.tr("fixer_run_complete").format(
+                modified=en_run_match.group("modified"),
+                deleted=en_run_match.group("deleted"),
+            )
+
+        return line
+
+    def replace_log_with_default_text(self) -> None:
+        if self.log_box is None:
+            return
+        default_text = self.default_log_text()
+        self.log_box.delete("1.0", tk.END)
+        self.log_box.insert(tk.END, default_text)
+        self.scroll_log_to_bottom(defer=True)
+        self.log_default_text = default_text
+
+    def refresh_default_log_language(self) -> None:
+        if self.log_box is None:
+            return
+        current_text = self.log_box.get("1.0", "end-1c")
+        new_default = self.default_log_text()
+        candidates = [
+            text
+            for text in (
+                self.log_default_text,
+                self.default_log_text_for_language("zh"),
+                self.default_log_text_for_language("en"),
+            )
+            if text
+        ]
+        for old_default in candidates:
+            if current_text.startswith(old_default):
+                remainder = current_text[len(old_default):]
+                self.log_box.delete("1.0", tk.END)
+                self.log_box.insert(tk.END, new_default + remainder)
+                self.scroll_log_to_bottom(defer=True)
+                self.log_default_text = new_default
+                current_text = self.log_box.get("1.0", "end-1c")
+                break
+        self.refresh_update_log_language(current_text)
+        self.scroll_log_to_bottom(defer=True)
+
+    def update_log_line_for_language(self, line: str) -> str:
+        process_line = self.translate_process_done_line(line)
+        if process_line != line:
+            return process_line
+
+        fixer_line = self.translate_fixer_summary_line(line)
+        if fixer_line != line:
+            return fixer_line
+
+        zh_current_prefix = "检查更新：当前版本 v"
+        zh_current_separator = "，最新版本 "
+        en_current_prefix = "Update check: current version v"
+        en_current_separator = ", latest version "
+
+        if line.startswith(zh_current_prefix):
+            body = line[len(zh_current_prefix):].rstrip("。.")
+            if zh_current_separator in body:
+                local, remote = body.split(zh_current_separator, 1)
+                return self.tr("update_current_log").format(local=local.strip(), remote=remote.strip())
+
+        if line.startswith(en_current_prefix):
+            body = line[len(en_current_prefix):].rstrip("。.")
+            if en_current_separator in body:
+                local, remote = body.split(en_current_separator, 1)
+                return self.tr("update_current_log").format(local=local.strip(), remote=remote.strip())
+
+        zh_no_file_prefix = "检查更新：发现新版本 "
+        zh_no_file_suffix = "，但暂时没有可下载文件。"
+        en_no_file_prefix = "Update check: version "
+        en_no_file_suffix = " is available, but no downloadable file is available yet."
+
+        if line.startswith(zh_no_file_prefix) and line.endswith(zh_no_file_suffix):
+            remote = line[len(zh_no_file_prefix):-len(zh_no_file_suffix)]
+            return self.tr("update_no_file_log").format(remote=remote.strip())
+
+        if line.startswith(en_no_file_prefix) and line.endswith(en_no_file_suffix):
+            remote = line[len(en_no_file_prefix):-len(en_no_file_suffix)]
+            return self.tr("update_no_file_log").format(remote=remote.strip())
+
+        translations = {
+            UI_COPY["zh"]["update_available_log"]: self.tr("update_available_log"),
+            UI_COPY["en"]["update_available_log"]: self.tr("update_available_log"),
+            UI_COPY["zh"]["update_downloaded_log"]: self.tr("update_downloaded_log"),
+            UI_COPY["en"]["update_downloaded_log"]: self.tr("update_downloaded_log"),
+            UI_COPY["zh"]["update_unknown_status"]: self.tr("update_unknown_status"),
+            UI_COPY["en"]["update_unknown_status"]: self.tr("update_unknown_status"),
+            f"---- {UI_COPY['zh']['update_check_start']} ----": f"---- {self.tr('update_check_start')} ----",
+            f"---- {UI_COPY['en']['update_check_start']} ----": f"---- {self.tr('update_check_start')} ----",
+            f"---- {UI_COPY['zh']['update_download_start']} ----": f"---- {self.tr('update_download_start')} ----",
+            f"---- {UI_COPY['en']['update_download_start']} ----": f"---- {self.tr('update_download_start')} ----",
+        }
+        return translations.get(line, line)
+
+    def refresh_update_log_language(self, current_text: str | None = None) -> None:
+        if self.log_box is None:
+            return
+        if current_text is None:
+            current_text = self.log_box.get("1.0", "end-1c")
+        lines = current_text.splitlines(keepends=True)
+        changed = False
+        translated_lines: list[str] = []
+        for raw_line in lines:
+            line = raw_line.rstrip("\r\n")
+            ending = raw_line[len(line):]
+            translated = self.update_log_line_for_language(line)
+            if translated != line:
+                changed = True
+            translated_lines.append(translated + ending)
+        if changed:
+            self.log_box.delete("1.0", tk.END)
+            self.log_box.insert(tk.END, "".join(translated_lines))
+            self.scroll_log_to_bottom(defer=True)
 
     def start_language_transition(self) -> None:
         if self.language_animating:
@@ -2187,17 +2586,23 @@ class FixerGui:
         self.log_title_label.configure(text=self.tr("log_title"))
         if hasattr(self.log_toggle, "set_label"):
             self.log_toggle.set_label(self.tr("debug_log"))  # type: ignore[attr-defined]
+        if hasattr(self.log_toggle, "set_progress"):
+            self.log_toggle.set_progress(self.log_toggle.progress)  # type: ignore[attr-defined]
         self.export_log_button.configure(text=self.tr("export_log"))
         self.clear_log_button.configure(text=self.tr("clear_log"))
+        self.refresh_default_log_language()
         if self.update_button is not None:
             self.update_button.configure(text=self.tr("check_update"))
 
     def rebuild_ui_preserving_log(self) -> None:
-        log_text = self.log_box.get("1.0", tk.END) if self.log_box is not None else None
+        log_text = self.log_box.get("1.0", "end-1c") if self.log_box is not None else None
         was_expanded = self.log_expanded
         for child in self.root.winfo_children():
             child.destroy()
         self.log_box = None
+        self.log_shell = None
+        self.log_inner = None
+        self.log_header = None
         self.log_area = None
         self.log_toggle = None
         self.log_expanded = was_expanded
@@ -2222,6 +2627,8 @@ class FixerGui:
             target_height = self.available_log_height()
             if target_height > 0 and abs(self.log_area.winfo_height() - target_height) > 1:
                 self.log_area.configure(height=target_height)
+                self.set_log_shell_height(self.log_shell_height_for_area(target_height))
+                self.set_log_visual_progress(1.0, target_height)
 
         self.root_resize_after_id = self.root.after(ROOT_RESIZE_SYNC_DELAY_MS, sync_height)
 
@@ -2461,7 +2868,7 @@ class FixerGui:
             )
         else:
             self.log_box.insert(tk.END, log_text)
-            self.log_box.see(tk.END)
+            self.scroll_log_to_bottom(defer=True)
 
         for _ in range(2):
             self.root.update_idletasks()
@@ -2481,6 +2888,8 @@ class FixerGui:
         self.contour_layers = []
 
     def schedule_contour_redraw(self, delay_ms: int = CONTOUR_REDRAW_DELAY_MS) -> None:
+        if self.log_animating and delay_ms >= CONTOUR_REDRAW_DELAY_MS:
+            return
         if self.contour_redraw_after_id is not None:
             with contextlib.suppress(tk.TclError):
                 self.root.after_cancel(self.contour_redraw_after_id)
@@ -2633,13 +3042,16 @@ class FixerGui:
     def tech_section_header(self, parent: tk.Widget, icon: str, title: str, _subtitle: str = "") -> tk.Label:
         header = self.theme_widget(tk.Frame(parent, bg=self.colors["panel"]), bg="panel")
         header.pack(fill=tk.X)
-        self.theme_widget(tk.Label(
-            header,
-            text=icon,
-            bg=self.colors["panel"],
-            fg=self.colors["accent"],
-            font=(SYMBOL_FONT_FAMILY, 15),
-        ), bg="panel", fg="accent").pack(side=tk.LEFT, padx=(0, 8))
+        if icon == "search":
+            SearchHeaderIcon(header, self.colors).pack(side=tk.LEFT, padx=(0, 8))
+        else:
+            self.theme_widget(tk.Label(
+                header,
+                text=icon,
+                bg=self.colors["panel"],
+                fg=self.colors["accent"],
+                font=(SYMBOL_FONT_FAMILY, 15),
+            ), bg="panel", fg="accent").pack(side=tk.LEFT, padx=(0, 8))
         title_label = self.theme_widget(tk.Label(
             header,
             text=title,
@@ -2716,7 +3128,7 @@ class FixerGui:
         target_shell = TechPanel(left_column, self.colors, padx=18, pady=14, min_height=176)
         target_shell.pack(fill=tk.X, pady=(0, 14))
         target_panel = target_shell.content
-        self.target_header_label = self.tech_section_header(target_panel, "▰", self.tr("target_title"), self.tr("target_sub"))
+        self.target_header_label = self.tech_section_header(target_panel, "search", self.tr("target_title"), self.tr("target_sub"))
 
         path_box = self.theme_widget(
             tk.Frame(target_panel, bg=self.colors["panel"], highlightthickness=1, highlightbackground=self.colors["border"]),
@@ -2818,32 +3230,32 @@ class FixerGui:
         self.rollback_button = TechTaskCard(task_cards, self.colors, self.tr("rollback_title"), self.tr("rollback_tip"), "", "◀", self.tr("rollback_action"), self.open_rollback_manager)
         self.rollback_button.grid(row=2, column=0, sticky="nsew")
 
-        log_shell = TechPanel(main, self.colors, padx=18, pady=12, min_height=112, fill_key="panel", stretch_content=True)
-        log_shell.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
-        log_panel = log_shell.content
-        log_header = self.theme_widget(tk.Frame(log_panel, bg=self.colors["panel"]), bg="panel")
-        log_header.pack(fill=tk.X)
+        self.log_shell = TechPanel(main, self.colors, padx=18, pady=12, min_height=1, fill_key="panel", stretch_content=True)
+        self.log_shell.pack(fill=tk.X, expand=False, pady=(12, 0))
+        log_panel = self.log_shell.content
+        self.log_header = self.theme_widget(tk.Frame(log_panel, bg=self.colors["panel"]), bg="panel")
+        self.log_header.pack(fill=tk.X)
         self.log_title_label = self.theme_widget(tk.Label(
-            log_header,
+            self.log_header,
             text=self.tr("log_title"),
             bg=self.colors["panel"],
             fg=self.colors["text"],
             font=(UI_FONT_FAMILY, UI_SECTION_FONT_SIZE),
         ), bg="panel", fg="text")
         self.log_title_label.pack(side=tk.LEFT)
-        self.log_toggle = LogPowerSwitch(log_header, self, self.tr("debug_log"), self.toggle_log_panel)
+        self.log_toggle = LogPowerSwitch(self.log_header, self, self.tr("debug_log"), self.toggle_log_panel)
         self.log_toggle.pack(side=tk.RIGHT, padx=(18, 0))
-        self.export_log_button = self.make_button(log_header, self.tr("export_log"), command=self.export_log, bg=self.colors["soft_button"], active=self.colors["soft_button_active"], fg=self.colors["text"], width=8, bg_key="soft_button", active_key="soft_button_active", fg_key="text")
+        self.export_log_button = self.make_button(self.log_header, self.tr("export_log"), command=self.export_log, bg=self.colors["soft_button"], active=self.colors["soft_button_active"], fg=self.colors["text"], width=8, bg_key="soft_button", active_key="soft_button_active", fg_key="text")
         self.export_log_button.pack(side=tk.RIGHT, padx=(8, 0))
-        self.clear_log_button = self.make_button(log_header, self.tr("clear_log"), command=self.clear_log, bg=self.colors["soft_button"], active=self.colors["soft_button_active"], fg=self.colors["text"], width=8, bg_key="soft_button", active_key="soft_button_active", fg_key="text")
+        self.clear_log_button = self.make_button(self.log_header, self.tr("clear_log"), command=self.clear_log, bg=self.colors["soft_button"], active=self.colors["soft_button_active"], fg=self.colors["text"], width=8, bg_key="soft_button", active_key="soft_button_active", fg_key="text")
         self.clear_log_button.pack(side=tk.RIGHT)
 
         self.log_area = self.theme_widget(tk.Frame(log_panel, bg=self.colors["panel"], height=0), bg="panel")
         self.log_area.pack(fill=tk.BOTH, expand=False, pady=(8, 0))
         self.log_area.pack_propagate(False)
-        log_inner = TechPanel(self.log_area, self.colors, padx=8, pady=8, min_height=1, fill_key="log_bg", stretch_content=True)
-        log_inner.pack(fill=tk.BOTH, expand=True)
-        log_frame = log_inner.content
+        self.log_inner = TechPanel(self.log_area, self.colors, padx=8, pady=8, min_height=1, fill_key="log_bg", stretch_content=True)
+        self.log_inner.place(x=0, y=0, relwidth=1, height=1)
+        log_frame = self.log_inner.content
         self.log_box = self.theme_widget(tk.Text(
             log_frame,
             bg=self.colors["log_bg"],
@@ -2859,19 +3271,14 @@ class FixerGui:
         self.bind_log_mousewheel(log_frame)
 
         if log_text is None:
-            stable_state = self.tr("enabled") if self.stable_texture.get() else self.tr("disabled")
-            fixmenu_state = self.tr("enabled") if self.fixmenu.get() else self.tr("disabled")
-            self.log(
-                f"[12:45:10]  {self.tr('ready')}\n"
-                f"[12:45:11]  {self.tr('target_path')}: {self.target_dir.get()}\n"
-                f"[12:45:11]  {self.tr('repair_status')}: {self.tr('stable_texture')} = {stable_state}  |  {self.tr('fix_menu')} = {fixmenu_state}\n"
-                f"[12:45:11]  {self.tr('click_start')}\n"
-            )
+            self.replace_log_with_default_text()
         else:
             self.log_box.insert(tk.END, log_text)
-            self.log_box.see(tk.END)
+            self.scroll_log_to_bottom(defer=True)
+            self.log_default_text = log_text if log_text == self.default_log_text() else None
 
         self.log_area.pack_forget()
+        self.set_log_shell_height(self.collapsed_log_shell_height())
         self.update_collapsed_window_height()
         self.sync_log_panel_state(animated=False)
 
@@ -2983,6 +3390,65 @@ class FixerGui:
             return
         self.log_title_label.configure(fg=self.colors["text"])
 
+    def collapsed_log_shell_height(self) -> int:
+        if self.log_shell is None:
+            return 1
+        self.root.update_idletasks()
+        header_height = 0
+        if self.log_header is not None:
+            header_height = max(self.log_header.winfo_reqheight(), self.log_header.winfo_height())
+        return max(1, header_height + self.log_shell.pady * 2 + 2)
+
+    def log_shell_height_for_area(self, area_height: int) -> int:
+        area_height = max(0, int(round(area_height)))
+        gap = LOG_AREA_TOP_GAP if area_height > 0 else 0
+        return self.collapsed_log_shell_height() + gap + area_height
+
+    def set_log_shell_height(self, height: int) -> None:
+        if self.log_shell is None:
+            return
+        height = max(1, int(round(height)))
+        self.log_shell.configure(height=height)
+        self.log_shell.canvas.configure(height=height)
+        if self.log_animating:
+            return
+        self.log_shell.schedule_draw(delay_ms=1)
+
+    def set_log_visual_progress(self, progress: float, area_height: int | None = None) -> None:
+        if self.log_area is None or self.log_inner is None or self.log_box is None:
+            return
+        progress = clamp01(progress)
+        if area_height is None:
+            area_height = self.log_area.winfo_height()
+        area_height = max(1, int(round(area_height)))
+        offset = round(-LOG_ANIMATION_SLIDE_OFFSET * (1.0 - progress))
+        self.log_inner.place_configure(x=0, y=offset, relwidth=1, height=area_height)
+
+        panel_color = self.colors["panel"]
+        log_bg = mix_color(panel_color, self.colors["log_bg"], progress)
+        log_text = mix_color(log_bg, self.colors["log_text"], progress)
+        animated_colors = dict(self.colors)
+        animated_colors["log_bg"] = log_bg
+        animated_colors["border"] = mix_color(panel_color, self.colors["border"], progress)
+        animated_colors["muted"] = mix_color(panel_color, self.colors["muted"], progress)
+        animated_colors["accent"] = mix_color(panel_color, self.colors["accent"], progress)
+        self.log_inner.set_colors(animated_colors if progress < 1.0 else self.colors)
+        self.log_box.configure(bg=log_bg, fg=log_text, insertbackground=log_text)
+
+    def begin_log_animation_timer_resolution(self) -> None:
+        if sys.platform != "win32" or self.log_timer_resolution_active:
+            return
+        with contextlib.suppress(AttributeError, OSError, ValueError):
+            if ctypes.windll.winmm.timeBeginPeriod(LOG_ANIMATION_TIMER_RESOLUTION_MS) == 0:
+                self.log_timer_resolution_active = True
+
+    def end_log_animation_timer_resolution(self) -> None:
+        if sys.platform != "win32" or not self.log_timer_resolution_active:
+            return
+        with contextlib.suppress(AttributeError, OSError, ValueError):
+            ctypes.windll.winmm.timeEndPeriod(LOG_ANIMATION_TIMER_RESOLUTION_MS)
+        self.log_timer_resolution_active = False
+
     def set_window_height(self, height: int) -> None:
         width = self.root.winfo_width()
         if width <= 1:
@@ -2992,6 +3458,8 @@ class FixerGui:
     def update_collapsed_window_height(self, apply_geometry: bool = False) -> int:
         if self.main_frame is None:
             return self.collapsed_window_height
+        if self.log_area is not None and not self.log_area.winfo_ismapped() and not self.log_animating:
+            self.set_log_shell_height(self.collapsed_log_shell_height())
         self.root.update_idletasks()
         height = max(
             MIN_COLLAPSED_WINDOW_HEIGHT,
@@ -3004,51 +3472,69 @@ class FixerGui:
         return height
 
     def available_log_height(self) -> int:
-        if self.log_area is None or self.main_frame is None:
+        if self.log_shell is None or self.main_frame is None:
             return 0
         self.root.update_idletasks()
         root_bottom = self.root.winfo_rooty() + self.root.winfo_height() - COLLAPSED_BOTTOM_PADDING
-        area_top = self.log_area.winfo_rooty()
-        return max(0, root_bottom - area_top)
+        shell_top = self.log_shell.winfo_rooty()
+        available_shell_height = max(0, root_bottom - shell_top)
+        return max(0, available_shell_height - self.collapsed_log_shell_height() - LOG_AREA_TOP_GAP)
 
     def sync_log_panel_state(self, animated: bool, expanded: bool | None = None) -> None:
-        if self.log_area is None or self.log_toggle is None:
+        if self.log_area is None or self.log_shell is None or self.log_toggle is None:
             return
 
         target_expanded = self.debug_log.get() if expanded is None else expanded
         target_progress = 1.0 if target_expanded else 0.0
+        collapsed_shell_height = self.collapsed_log_shell_height()
 
         if not animated:
             if target_expanded:
+                self.set_log_shell_height(collapsed_shell_height)
+                self.update_collapsed_window_height()
                 self.pack_log_area()
                 target_window_height = max(
-                    self.root.winfo_height(),
                     EXPANDED_WINDOW_HEIGHT,
-                    self.collapsed_window_height + DEFAULT_LOG_AREA_HEIGHT,
+                    self.collapsed_window_height + LOG_AREA_TOP_GAP + DEFAULT_LOG_AREA_HEIGHT,
                 )
                 self.set_window_height(target_window_height)
                 self.root.update_idletasks()
-                target_height = max(DEFAULT_LOG_AREA_HEIGHT, self.available_log_height())
+                target_height = max(
+                    DEFAULT_LOG_AREA_HEIGHT,
+                    target_window_height - self.collapsed_window_height - LOG_AREA_TOP_GAP,
+                    self.available_log_height(),
+                )
             else:
                 target_height = 0
             self.log_expanded = target_expanded
             self.debug_log.set(target_expanded)
             self.log_area.configure(height=target_height)
+            self.set_log_shell_height(self.log_shell_height_for_area(target_height))
+            self.log_shell.pack_configure(fill=tk.X, expand=False)
+            self.set_log_visual_progress(target_progress, target_height if target_expanded else 1)
             self.log_area.pack_configure(
                 fill=tk.BOTH if target_expanded else tk.X,
                 expand=target_expanded,
             )
             if not target_expanded:
                 self.log_area.pack_forget()
+                self.set_log_shell_height(collapsed_shell_height)
                 self.update_collapsed_window_height(apply_geometry=True)
             self.log_toggle.set_progress(target_progress)
             self.set_log_title_progress(target_progress)
+            if target_expanded:
+                self.scroll_log_to_bottom(defer=True)
             self.schedule_contour_redraw(delay_ms=1)
             return
 
         self.log_animating = True
         if target_expanded:
+            self.set_log_shell_height(collapsed_shell_height)
+            self.update_collapsed_window_height()
             self.pack_log_area()
+            self.log_area.configure(height=0)
+        else:
+            self.set_log_visual_progress(1.0, max(1, self.log_area.winfo_height()))
 
         self.root.update_idletasks()
         self.log_area.update_idletasks()
@@ -3057,55 +3543,74 @@ class FixerGui:
         if target_expanded:
             target_window_height = max(
                 EXPANDED_WINDOW_HEIGHT,
-                self.collapsed_window_height + DEFAULT_LOG_AREA_HEIGHT,
+                self.collapsed_window_height + LOG_AREA_TOP_GAP + DEFAULT_LOG_AREA_HEIGHT,
             )
-        if target_expanded:
-            target_window_height = max(start_window_height, target_window_height)
 
-        start_height = self.log_area.winfo_height()
-        if start_height <= 1 and self.log_expanded:
-            start_height = self.available_log_height()
-        start_available_height = self.available_log_height()
         target_height = (
-            max(DEFAULT_LOG_AREA_HEIGHT, start_available_height + (target_window_height - start_window_height))
+            max(
+                DEFAULT_LOG_AREA_HEIGHT,
+                target_window_height - self.collapsed_window_height - LOG_AREA_TOP_GAP,
+            )
             if target_expanded
             else 0
         )
+        target_shell_height = self.log_shell_height_for_area(target_height)
         start_progress = self.log_toggle.progress
-        self.log_area.pack_configure(fill=tk.X, expand=False)
+        self.log_shell.pack_configure(fill=tk.X, expand=False)
+        visual_area_height = target_height if target_expanded else max(1, self.log_area.winfo_height())
+        if target_expanded:
+            self.set_log_shell_height(target_shell_height)
+            self.log_area.configure(height=target_height)
+            self.log_area.pack_configure(fill=tk.BOTH, expand=False)
+            self.set_log_visual_progress(0.0, visual_area_height)
 
-        frames = LOG_ANIMATION_FRAMES
+        duration_ms = LOG_ANIMATION_DURATION_MS
         interval_ms = LOG_ANIMATION_INTERVAL_MS
+        self.begin_log_animation_timer_resolution()
+        start_time = time.perf_counter()
+        last_window_height: int | None = None
 
-        def step(frame: int = 0) -> None:
-            progress = ease_in_out(frame / frames)
+        def step() -> None:
+            nonlocal last_window_height
+            linear_progress = clamp01((time.perf_counter() - start_time) * 1000 / duration_ms)
+            progress = ease_in_out(linear_progress)
             window_height = round(start_window_height + (target_window_height - start_window_height) * progress)
-            height = round(start_height + (target_height - start_height) * progress)
             arrow_progress = start_progress + (target_progress - start_progress) * progress
-            self.set_window_height(window_height)
-            self.log_area.configure(height=max(0, height))
+            visual_progress = progress if target_expanded else 1.0 - progress
+            if window_height != last_window_height:
+                self.set_window_height(window_height)
+                last_window_height = window_height
+            self.set_log_visual_progress(visual_progress, visual_area_height)
             self.log_toggle.set_progress(arrow_progress)
             self.set_log_title_progress(arrow_progress)
 
-            if frame < frames:
-                self.root.after(interval_ms, lambda: step(frame + 1))
+            if linear_progress < 1.0:
+                self.root.after(interval_ms, step)
                 return
 
             self.log_expanded = target_expanded
             self.debug_log.set(target_expanded)
             self.set_window_height(target_window_height)
-            self.log_area.configure(height=target_height)
-            self.log_area.pack_configure(
-                fill=tk.BOTH if target_expanded else tk.X,
-                expand=target_expanded,
-            )
-            if not target_expanded:
+            self.set_log_shell_height(target_shell_height)
+            self.log_shell.pack_configure(fill=tk.X, expand=False)
+            if target_expanded:
+                self.pack_log_area()
+                self.log_area.configure(height=target_height)
+                self.log_area.pack_configure(fill=tk.BOTH, expand=True)
+                self.set_log_visual_progress(1.0, target_height)
+            else:
+                self.set_log_visual_progress(0.0, visual_area_height)
                 self.log_area.pack_forget()
+                self.set_log_shell_height(collapsed_shell_height)
                 collapsed_height = self.update_collapsed_window_height()
                 self.set_window_height(collapsed_height)
             self.log_toggle.set_progress(target_progress)
             self.set_log_title_progress(target_progress)
+            if target_expanded:
+                self.scroll_log_to_bottom(defer=True)
             self.log_animating = False
+            self.log_shell.schedule_draw(delay_ms=1)
+            self.end_log_animation_timer_resolution()
             self.schedule_contour_redraw(delay_ms=1)
 
         step()
@@ -3113,7 +3618,132 @@ class FixerGui:
     def toggle_theme(self) -> None:
         self.start_theme_transition()
 
+    def update_notes_text(self, notes_raw: object) -> str:
+        notes = [str(note) for note in notes_raw] if isinstance(notes_raw, list) else []
+        return "\n".join(f"- {note}" for note in notes) if notes else self.tr("none")
+
+    def bool_text(self, value: bool) -> str:
+        return self.tr("yes") if value else self.tr("no")
+
+    def start_update_check_i18n(self, manual: bool = False) -> None:
+        if self.update_check_running:
+            return
+        self.update_check_running = True
+        if manual:
+            self.log(f"\n---- {self.tr('update_check_start')} ----")
+
+        def worker() -> None:
+            try:
+                result = check_and_download_update()
+                self.log_queue.put(("update_result", result, manual))
+            except Exception as exc:
+                self.log_queue.put(("update_error", str(exc), manual))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def start_update_download_i18n(self, result: dict[str, object], destination_path: str) -> None:
+        if self.update_check_running:
+            return
+        self.update_check_running = True
+        self.log(f"\n---- {self.tr('update_download_start')} ----\n{self.tr('update_save_location')}: {destination_path}")
+
+        def worker() -> None:
+            try:
+                downloaded = download_update_from_result(result, destination_path=destination_path)
+                self.log_queue.put(("update_result", downloaded, True))
+            except Exception as exc:
+                self.log_queue.put(("update_error", str(exc), True))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def handle_update_result_i18n(self, result: dict[str, object], manual: bool) -> None:
+        self.update_check_running = False
+        status = result.get("status")
+        remote_tag = str(result.get("remote_tag") or "")
+
+        if status == "current":
+            if manual:
+                messagebox.showinfo(self.tr("check_update"), self.tr("update_current_message").format(version=APP_VERSION))
+            self.log(f"\n{self.tr('update_current_log').format(local=APP_VERSION, remote=remote_tag)}")
+            return
+
+        if status == "no_file":
+            self.log(f"\n{self.tr('update_no_file_log').format(remote=remote_tag)}")
+            messagebox.showinfo(self.tr("update_available_title"), self.tr("update_no_file_message").format(remote=remote_tag))
+            return
+
+        if status == "available":
+            asset_name = str(result.get("asset_name") or "")
+            required = bool(result.get("required") or False)
+            note_text = self.update_notes_text(result.get("release_notes"))
+            self.log(
+                f"\n{self.tr('update_available_log')}\n"
+                f"{self.tr('update_current_version')}: v{APP_VERSION}\n"
+                f"{self.tr('update_remote_version')}: {remote_tag}\n"
+                f"{self.tr('update_file')}: {asset_name}\n"
+                f"{self.tr('update_required')}: {self.bool_text(required)}\n"
+                f"{self.tr('update_notes')}:\n{note_text}"
+            )
+            if messagebox.askyesno(
+                self.tr("update_available_title"),
+                self.tr("update_available_prompt").format(remote=remote_tag, asset=asset_name, notes=note_text),
+            ):
+                asset_suffix = Path(asset_name).suffix
+                destination = filedialog.asksaveasfilename(
+                    title=self.tr("update_choose_save_title"),
+                    initialdir=str(APP_DIR),
+                    initialfile=safe_download_name(asset_name),
+                    defaultextension=asset_suffix,
+                    filetypes=[
+                        (self.tr("update_file_type"), f"*{asset_suffix}" if asset_suffix else "*.*"),
+                        (self.tr("all_files"), "*.*"),
+                    ],
+                )
+                if not destination:
+                    self.log(f"\n{self.tr('update_cancel_save')}")
+                    return
+                destination_path = Path(destination)
+                if destination_path.exists() and not messagebox.askyesno(
+                    self.tr("overwrite_file_title"),
+                    self.tr("overwrite_file_message").format(path=destination_path),
+                ):
+                    self.log(f"\n{self.tr('update_cancel_overwrite')}")
+                    return
+                self.start_update_download_i18n(result, destination)
+            else:
+                self.log(f"\n{self.tr('update_cancel_download')}")
+            return
+
+        if status == "downloaded":
+            asset_name = str(result.get("asset_name") or "")
+            downloaded_path = str(result.get("downloaded_path") or "")
+            required = bool(result.get("required") or False)
+            note_text = self.update_notes_text(result.get("release_notes"))
+            self.log(
+                f"\n{self.tr('update_downloaded_log')}\n"
+                f"{self.tr('update_version')}: {remote_tag}\n"
+                f"{self.tr('update_file')}: {asset_name}\n"
+                f"{self.tr('update_location')}: {downloaded_path}\n"
+                f"{self.tr('update_required')}: {self.bool_text(required)}\n"
+                f"{self.tr('update_notes')}:\n{note_text}"
+            )
+            messagebox.showinfo(
+                self.tr("update_downloaded_title"),
+                self.tr("update_downloaded_message").format(remote=remote_tag, path=downloaded_path, notes=note_text),
+            )
+            return
+
+        self.log(f"\n{self.tr('update_unknown_status')}")
+
+    def handle_update_error_i18n(self, message: str, manual: bool) -> None:
+        self.update_check_running = False
+        public_message = sanitize_update_error_message(message)
+        self.log(f"\n{self.tr('update_error_log').format(message=public_message)}")
+        if manual:
+            messagebox.showerror(self.tr("update_error_title"), public_message)
+
     def start_update_check(self, manual: bool = False) -> None:
+        return self.start_update_check_i18n(manual)
         if self.update_check_running:
             return
         self.update_check_running = True
@@ -3130,6 +3760,7 @@ class FixerGui:
         threading.Thread(target=worker, daemon=True).start()
 
     def start_update_download(self, result: dict[str, object], destination_path: str) -> None:
+        return self.start_update_download_i18n(result, destination_path)
         if self.update_check_running:
             return
         self.update_check_running = True
@@ -3145,6 +3776,7 @@ class FixerGui:
         threading.Thread(target=worker, daemon=True).start()
 
     def handle_update_result(self, result: dict[str, object], manual: bool) -> None:
+        return self.handle_update_result_i18n(result, manual)
         self.update_check_running = False
         status = result.get("status")
         remote_tag = str(result.get("remote_tag") or "")
@@ -3224,6 +3856,7 @@ class FixerGui:
         self.log(f"\n检查更新：收到未知更新状态。")
 
     def handle_update_error(self, message: str, manual: bool) -> None:
+        return self.handle_update_error_i18n(message, manual)
         self.update_check_running = False
         public_message = sanitize_update_error_message(message)
         self.log(f"\n检查更新失败：{public_message}")
@@ -3353,9 +3986,10 @@ class FixerGui:
     def log(self, text: str, newline: bool = True) -> None:
         if self.log_box is None:
             return
+        text = self.translate_log_text_for_language(text)
         suffix = "\n" if newline else ""
         self.log_box.insert(tk.END, text + suffix)
-        self.log_box.see(tk.END)
+        self.scroll_log_to_bottom()
 
     def clear_log(self) -> None:
         if self.log_box is not None:
@@ -3370,7 +4004,7 @@ class FixerGui:
             filetypes=[(self.tr("text_files"), "*.txt"), (self.tr("all_files"), "*.*")],
         )
         if path:
-            Path(path).write_text(self.log_box.get("1.0", tk.END), encoding="utf-8")
+            Path(path).write_text(self.log_box.get("1.0", "end-1c"), encoding="utf-8")
             messagebox.showinfo(self.tr("export_done"), f"{self.tr('export_done_msg')}\n{path}")
 
     def refresh_config(self) -> None:
@@ -3387,7 +4021,7 @@ class FixerGui:
         self.backup_window = window
         window.title(self.tr("rollback_window"))
         set_window_icon(window)
-        window.geometry("760x430")
+        window.geometry(f"{ROLLBACK_WINDOW_BASE_WIDTH}x{ROLLBACK_WINDOW_BASE_HEIGHT}")
         window.configure(bg=self.colors["bg"])
 
         outer = tk.Frame(window, bg=self.colors["bg"], padx=20, pady=18)
@@ -3426,9 +4060,9 @@ class FixerGui:
             row,
             self.tr("refresh_backups"),
             command=self.refresh_backup_list,
-            bg=self.colors["soft_button"],
-            active=self.colors["soft_button_active"],
-            fg=self.colors["text"],
+            bg=ROLLBACK_CYAN,
+            active=ROLLBACK_CYAN,
+            fg=ROLLBACK_BUTTON_TEXT,
             width=12,
         ).pack(side=tk.LEFT)
 
@@ -3436,8 +4070,9 @@ class FixerGui:
             row,
             self.tr("restore_selected"),
             command=lambda: self.restore_selected_backup(False),
-            bg=self.colors["green"],
-            active=self.colors["green_dark"],
+            bg=ROLLBACK_MAGENTA,
+            active=ROLLBACK_MAGENTA,
+            fg=ROLLBACK_BUTTON_TEXT,
             width=14,
         ).pack(side=tk.LEFT, padx=(10, 0))
 
@@ -3445,10 +4080,16 @@ class FixerGui:
             row,
             self.tr("restore_before"),
             command=lambda: self.restore_selected_backup(True),
-            bg=self.colors["blue_dark"],
-            active="#2872a3",
+            bg=ROLLBACK_YELLOW,
+            active=ROLLBACK_YELLOW,
+            fg=ROLLBACK_BUTTON_TEXT,
             width=14,
         ).pack(side=tk.LEFT, padx=(10, 0))
+
+        window.update_idletasks()
+        required_width = max(ROLLBACK_WINDOW_BASE_WIDTH, row.winfo_reqwidth() + 44)
+        window.minsize(required_width, ROLLBACK_WINDOW_BASE_HEIGHT)
+        window.geometry(f"{required_width}x{ROLLBACK_WINDOW_BASE_HEIGHT}")
 
         self.refresh_backup_list()
 
