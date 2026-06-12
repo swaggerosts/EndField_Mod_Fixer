@@ -7,17 +7,20 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-RABBITFX_RUN = r"CommandList\RabbitFX\SetTextures"
+RABBITFX_SET_TEXTURES_RUN = r"CommandList\RabbitFX\SetTextures"
+RABBITFX_EFFECTS_RUN = r"CommandList\RabbitFX\Run"
 RABBITFX_MAPS = (
     ("DiffuseMap", "Diffuse"),
-    ("NormalMap", "Normalmap"),
     ("LightMap", "Lightmap"),
-    ("HighLightMap", "HighLightmap"),
-    ("RampMap", "Rampmap"),
-    ("MaterialMap", "Materialmap"),
-    ("StockingMap", "Stockingmap"),
+    ("NormalMap", "Normalmap"),
+    ("DiscardMap", "DiscardMap"),
+    ("RainMap", "Rainmap"),
+    ("GlowMap", "GlowMap"),
+    ("FXMap", "FXMap"),
 )
 RABBITFX_ROLES = tuple(role for _, role in RABBITFX_MAPS)
+RABBITFX_SET_TEXTURE_ROLES = ("Diffuse", "Lightmap", "Normalmap", "DiscardMap", "Rainmap")
+RABBITFX_EFFECT_ROLES = ("GlowMap", "FXMap")
 RABBITFX_PATTERNS = tuple(
     (re.compile(rf"(?<![A-Za-z]){re.escape(keyword)}(?![A-Za-z])", re.IGNORECASE), role)
     for keyword, role in RABBITFX_MAPS
@@ -32,7 +35,10 @@ BACKUP_RE = re.compile(
 )
 SECTION_RE = re.compile(r"^\s*\[(?P<name>[^\]]+)\]\s*$")
 PS_T_RE = re.compile(r"^(?P<indent>\s*)ps-t(?P<slot>\d+)(?P<eq>\s*=\s*)(?P<res>\S+)(?P<tail>.*)$", re.IGNORECASE)
-RABBITFX_RE = re.compile(r"^\s*Resource\\RabbitFX\\|^\s*run\s*=\s*CommandList\\RabbitFX\\SetTextures", re.IGNORECASE)
+RABBITFX_RE = re.compile(
+    r"^\s*Resource\\RabbitFX\\|^\s*run\s*=\s*CommandList\\RabbitFX\\(?:SetTextures|Run)",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -47,6 +53,7 @@ class Conversion:
     section: str
     slots: list[int]
     roles: list[str]
+    action: str
 
 
 @dataclass
@@ -111,6 +118,25 @@ def parse_slots(raw: str) -> set[int]:
 
 
 def infer_role(resource: str) -> str | None:
+    lowered = resource.lower()
+    if "highlight" in lowered:
+        return None
+
+    flexible_roles = (
+        ("discard", "DiscardMap"),
+        ("rain", "Rainmap"),
+        ("glow", "GlowMap"),
+        ("fxmap", "FXMap"),
+        ("fx_map", "FXMap"),
+        ("fx-map", "FXMap"),
+        ("diffuse", "Diffuse"),
+        ("light", "Lightmap"),
+        ("normal", "Normalmap"),
+    )
+    for token, role in flexible_roles:
+        if token in lowered:
+            return role
+
     for pattern, role in RABBITFX_PATTERNS:
         if pattern.search(resource):
             return role
@@ -119,12 +145,71 @@ def infer_role(resource: str) -> str | None:
 
 def make_rabbitfx_lines(indent: str, role_resources: dict[str, str]) -> list[str]:
     lines: list[str] = []
-    for role in RABBITFX_ROLES:
+
+    for role in RABBITFX_SET_TEXTURE_ROLES:
         resource = role_resources.get(role)
         if resource:
             lines.append(f"{indent}Resource\\RabbitFX\\{role} = ref {resource}")
-    lines.append(f"{indent}run = {RABBITFX_RUN}")
+    if any(role in role_resources for role in RABBITFX_SET_TEXTURE_ROLES):
+        lines.append(f"{indent}run = {RABBITFX_SET_TEXTURES_RUN}")
+
+    for role in RABBITFX_EFFECT_ROLES:
+        resource = role_resources.get(role)
+        if resource:
+            lines.append(f"{indent}Resource\\RabbitFX\\{role} = ref {resource}")
+    if any(role in role_resources for role in RABBITFX_EFFECT_ROLES):
+        lines.append(f"{indent}run = {RABBITFX_EFFECTS_RUN}")
+
     return lines
+
+
+def has_cross_ib(content: str) -> bool:
+    return bool(re.search(r"CustomShader_ExtractCB1|cross\s*[-_ ]?\s*ib", content, flags=re.IGNORECASE))
+
+
+def section_has_conditional_texture_bindings(lines: list[str]) -> bool:
+    depth = 0
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith(";"):
+            continue
+
+        keyword = stripped.split(None, 1)[0].lower()
+        if keyword == "endif":
+            depth = max(0, depth - 1)
+
+        match = PS_T_RE.match(line)
+        if match and depth > 0 and int(match.group("slot")) >= 2 and infer_role(match.group("res")):
+            return True
+
+        if keyword == "if":
+            depth += 1
+
+    return False
+
+
+def shift_ps_t_line(line: str, slots: set[int] | None) -> tuple[str, int | None, str | None]:
+    stripped = line.lstrip()
+    if stripped.startswith(";") or "CheckTextureOverride" in line:
+        return line, None, None
+
+    match = PS_T_RE.match(line)
+    if not match:
+        return line, None, None
+
+    slot = int(match.group("slot"))
+    if slot < 2 or (slots is not None and slot not in slots):
+        return line, None, None
+
+    role = infer_role(match.group("res"))
+    if not role:
+        return line, None, None
+
+    shifted = (
+        f"{match.group('indent')}ps-t{slot + 2}"
+        f"{match.group('eq')}{match.group('res')}{match.group('tail')}"
+    )
+    return shifted, slot, role
 
 
 def convert_content(
@@ -132,15 +217,43 @@ def convert_content(
     slots: set[int] | None,
     comment_originals: bool,
     force: bool,
+    strategy: str = "auto",
 ) -> tuple[str, list[Conversion]]:
     lines = content.splitlines()
     had_final_newline = content.endswith(("\n", "\r"))
     newline = detect_newline(content)
     output = list(lines)
     conversions: list[Conversion] = []
+    cross_ib = has_cross_ib(content)
 
     for section in reversed(collect_sections(lines)):
-        section_lines = lines[section.start:section.end]
+        section_lines = output[section.start:section.end]
+        section_strategy = strategy
+        if strategy == "auto":
+            section_strategy = "shift" if cross_ib or section_has_conditional_texture_bindings(section_lines) else "rabbitfx"
+
+        if section_strategy == "shift":
+            shifted_slots: list[int] = []
+            shifted_roles: set[str] = set()
+            for index in range(section.start + 1, section.end):
+                new_line, slot, role = shift_ps_t_line(output[index], slots)
+                if slot is None or role is None:
+                    continue
+                output[index] = new_line
+                shifted_slots.append(slot)
+                shifted_roles.add(role)
+
+            if shifted_slots:
+                conversions.append(
+                    Conversion(
+                        section=section.name,
+                        slots=sorted(set(shifted_slots)),
+                        roles=[role for role in RABBITFX_ROLES if role in shifted_roles],
+                        action="shift+2",
+                    )
+                )
+            continue
+
         if not force and any(RABBITFX_RE.search(line) and not line.lstrip().startswith(";") for line in section_lines):
             continue
 
@@ -193,6 +306,7 @@ def convert_content(
                 section=section.name,
                 slots=sorted(role_slots.values()),
                 roles=[role for role in RABBITFX_ROLES if role in role_resources],
+                action="rabbitfx",
             )
         )
 
@@ -238,6 +352,7 @@ def process_file(
     slots: set[int] | None,
     comment_originals: bool,
     force: bool,
+    strategy: str,
     dry_run: bool,
     stamp: str,
 ) -> FileResult:
@@ -247,6 +362,7 @@ def process_file(
         slots=slots,
         comment_originals=comment_originals,
         force=force,
+        strategy=strategy,
     )
     changed = new_content != content
     if changed and not dry_run:
@@ -257,7 +373,7 @@ def process_file(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=f"Convert ps-t {RABBITFX_KEYWORDS} bindings to RabbitFX SetTextures entries.",
+        description=f"Directly fix ps-t {RABBITFX_KEYWORDS} bindings without running Endfield_mod_fixer.py first.",
     )
     parser.add_argument("target", help="INI file or mod directory to scan.")
     parser.add_argument(
@@ -268,6 +384,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing files.")
     parser.add_argument("--force", action="store_true", help="Convert sections even if RabbitFX entries already exist.")
+    parser.add_argument(
+        "--strategy",
+        choices=("auto", "rabbitfx", "shift"),
+        default="auto",
+        help="Fix strategy. auto uses +2 shift for cross-IB/conditional sections and RabbitFX otherwise.",
+    )
     parser.add_argument("--include-backups", action="store_true", help="Include backup-looking files when scanning a directory.")
     parser.add_argument("--include-disabled", action="store_true", help="Also process paths whose folder name starts with DISABLED.")
     parser.add_argument(
@@ -298,6 +420,7 @@ def main(argv: list[str] | None = None) -> int:
             slots=args.slots,
             comment_originals=not args.delete_originals,
             force=args.force,
+            strategy=args.strategy,
             dry_run=args.dry_run,
             stamp=stamp,
         )
@@ -310,10 +433,13 @@ def main(argv: list[str] | None = None) -> int:
         for conversion in result.conversions:
             slots = ",".join(f"ps-t{slot}" for slot in conversion.slots)
             roles = ",".join(conversion.roles)
-            print(f"  - {conversion.section}: {slots} -> RabbitFX {roles}")
+            if conversion.action == "shift+2":
+                print(f"  - {conversion.section}: {slots} shifted +2 ({roles})")
+            else:
+                print(f"  - {conversion.section}: {slots} -> RabbitFX {roles}")
 
     if changed_count == 0:
-        print(f"No {RABBITFX_KEYWORDS} ps-t bindings found. Skipped.")
+        print("No files changed. Skipped.")
     elif args.dry_run:
         print(f"Dry run complete. {changed_count} file(s) would be changed.")
     else:

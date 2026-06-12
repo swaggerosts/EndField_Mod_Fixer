@@ -1,17 +1,8 @@
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
 
 build/
 dist/
-release/
-release_slim/
-build_onefile/
-build_onefile_slim/
-*.spec
 
-admin_uploader/
-.env
-config.json
 *.log
+.efmi_unified_backups/
