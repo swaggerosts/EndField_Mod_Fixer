@@ -65,9 +65,9 @@ LOG_ANIMATION_SLIDE_OFFSET = 28
 ROOT_RESIZE_SYNC_DELAY_MS = 45
 CONTOUR_TOP_OFFSET = 42
 CONTOUR_SOURCE_IMAGE_NAME = "\u7b49\u9ad8\u7ebf.png"
-TENCENT_UPDATE_MANIFEST_URL = "https://zmdnb-fix-1318258392.cos.ap-guangzhou.myqcloud.com/zmd-fix/latest.json"
-GITHUB_REPO = "swaggerosts/EndField_Mod_Fixer"
-GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+PRIMARY_UPDATE_MANIFEST_URL = ""
+SECONDARY_UPDATE_REPO = ""
+SECONDARY_UPDATE_API = ""
 UPDATE_REQUEST_TIMEOUT = 15
 UPDATE_CHECK_DELAY_MS = 1400
 UPDATE_ASSET_SUFFIXES = (".exe", ".zip", ".7z", ".rar")
@@ -540,34 +540,34 @@ def system_region_is_china() -> bool:
 
 def ordered_update_sources() -> list[dict[str, str]]:
     sources = {
-        "tencent": {
-            "name": "腾讯云",
+        "primary": {
+            "name": "更新服务",
             "kind": "manifest",
-            "url": TENCENT_UPDATE_MANIFEST_URL,
+            "url": PRIMARY_UPDATE_MANIFEST_URL,
         },
-        "github_release": {
-            "name": "GitHub",
-            "kind": "github_release",
-            "url": GITHUB_LATEST_RELEASE_API,
+        "secondary_release": {
+            "name": "更新服务",
+            "kind": "secondary_release",
+            "url": SECONDARY_UPDATE_API,
         },
     }
 
     override = os.environ.get("EFMI_UPDATE_SOURCE", "").strip().lower()
-    if override == "tencent":
-        return [sources["tencent"], sources["github_release"]]
-    if override == "github":
-        return [sources["github_release"], sources["tencent"]]
+    if override == "primary":
+        return [sources["primary"], sources["secondary_release"]]
+    if override == "secondary":
+        return [sources["secondary_release"], sources["primary"]]
 
     if system_region_is_china():
-        return [sources["tencent"], sources["github_release"]]
-    return [sources["github_release"], sources["tencent"]]
+        return [sources["primary"], sources["secondary_release"]]
+    return [sources["secondary_release"], sources["primary"]]
 
 
 def update_request(url: str, api: bool = False) -> urllib.request.Request:
     headers = {"User-Agent": f"Endfield-Mod-Fixer/{APP_VERSION}"}
     if api:
         headers["Accept"] = "application/vnd.github+json"
-    elif url == TENCENT_UPDATE_MANIFEST_URL:
+    elif url == PRIMARY_UPDATE_MANIFEST_URL:
         headers["Accept"] = "application/json"
     return urllib.request.Request(
         url,
@@ -619,7 +619,7 @@ def manifest_update_info(url: str, source_name: str) -> dict[str, object]:
     }
 
 
-def choose_github_release_asset(release: dict[str, object]) -> dict[str, object] | None:
+def choose_secondary_release_asset(release: dict[str, object]) -> dict[str, object] | None:
     assets = release.get("assets")
     if not isinstance(assets, list):
         return None
@@ -637,7 +637,7 @@ def choose_github_release_asset(release: dict[str, object]) -> dict[str, object]
     return (preferred or valid_assets)[0] if valid_assets else None
 
 
-def github_asset_sha256(asset: dict[str, object]) -> str:
+def release_asset_sha256(asset: dict[str, object]) -> str:
     digest = str(asset.get("digest") or "").strip()
     if digest.lower().startswith("sha256:"):
         return digest.split(":", 1)[1].strip()
@@ -652,13 +652,13 @@ def release_notes_from_body(body: object) -> list[str]:
     return lines[:8] if lines else [text]
 
 
-def github_update_info(url: str, source_name: str) -> dict[str, object]:
+def secondary_update_info(url: str, source_name: str) -> dict[str, object]:
     release = fetch_json_url(url, api=True)
     remote_tag = str(release.get("tag_name") or "").strip()
     if not remote_tag:
         raise RuntimeError("更新数据缺少版本号。")
 
-    asset = choose_github_release_asset(release)
+    asset = choose_secondary_release_asset(release)
     download_url = str(asset.get("browser_download_url") or "").strip() if asset else ""
     return {
         "source": source_name,
@@ -666,7 +666,7 @@ def github_update_info(url: str, source_name: str) -> dict[str, object]:
         "remote_tag": remote_tag,
         "asset_name": str(asset.get("name") or "release_asset") if asset else "",
         "download_url": download_url,
-        "sha256": github_asset_sha256(asset) if asset else "",
+        "sha256": release_asset_sha256(asset) if asset else "",
         "required": False,
         "release_notes": release_notes_from_body(release.get("body")),
     }
@@ -675,23 +675,23 @@ def github_update_info(url: str, source_name: str) -> dict[str, object]:
 def fetch_update_info_from_source(source: dict[str, str]) -> dict[str, object]:
     if source["kind"] == "manifest":
         return manifest_update_info(source["url"], source["name"])
-    if source["kind"] == "github_release":
-        return github_update_info(source["url"], source["name"])
+    if source["kind"] == "secondary_release":
+        return secondary_update_info(source["url"], source["name"])
     raise RuntimeError("未知更新服务配置。")
 
 
 def sanitize_update_error_message(message: str) -> str:
     cleaned = re.sub(r"https?://[^\s)）]+", "[更新地址已隐藏]", str(message))
     replacements = {
-        "GitHub Release": "更新服务",
-        "GitHub": "更新服务",
-        "github": "更新服务",
-        "腾讯云": "更新服务",
-        "Tencent": "更新服务",
-        "tencent": "更新服务",
-        "myqcloud.com": "更新服务",
-        "github.com": "更新服务",
-        "api.github.com": "更新服务",
+        "Release Service": "更新服务",
+        "Publish Service": "更新服务",
+        "secondary": "更新服务",
+        "云端服务": "更新服务",
+        "CloudProvider": "更新服务",
+        "primary": "更新服务",
+        "cloud.example": "更新服务",
+        "publish.example": "更新服务",
+        "publish-api.example": "更新服务",
     }
     for old, new in replacements.items():
         cleaned = cleaned.replace(old, new)
@@ -2108,7 +2108,7 @@ class RoundedButton(tk.Canvas):
 
 
 class FixerGui:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, initial_target_dir: Path | None = None) -> None:
         self.root = root
         self.root.title(APP_TITLE)
         configure_app_fonts(self.root)
@@ -2120,7 +2120,7 @@ class FixerGui:
         self.theme_name = "dark"
         self.language = "zh"
         self.colors = THEMES[self.theme_name]
-        self.target_dir = tk.StringVar(value=str(default_target_dir()))
+        self.target_dir = tk.StringVar(value=str(initial_target_dir or default_target_dir()))
         self.stable_texture = tk.BooleanVar(value=False)
         self.fixmenu = tk.BooleanVar(value=False)
         self.include_disabled = tk.BooleanVar(value=False)
@@ -4138,11 +4138,23 @@ class FixerGui:
         self.run_rollback(self.backup_items[index]["name"], before=before)
 
 
-def main() -> None:
+def initial_target_dir_from_argv(argv: list[str]) -> Path | None:
+    if not argv:
+        return None
+
+    candidate = Path(argv[0]).expanduser()
+    if not candidate.exists() or not candidate.is_dir():
+        return None
+
+    return candidate.resolve()
+
+
+def main(argv: list[str] | None = None) -> None:
     try:
         configure_process_dpi_awareness()
+        initial_target_dir = initial_target_dir_from_argv(sys.argv[1:] if argv is None else argv)
         root = tk.Tk()
-        FixerGui(root)
+        FixerGui(root, initial_target_dir)
         root.mainloop()
     except Exception:
         crash_log = APP_DIR / "gui_crash.log"

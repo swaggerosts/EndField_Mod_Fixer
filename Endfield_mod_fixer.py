@@ -639,6 +639,9 @@ END_FIELD_FIXED_MARKER_RE = re.compile(r"^\s*;\s*endfield_mod_fix:\s*v1\.2\s+app
 LEGACY_PS_T_SHIFT_MARKER_RE = re.compile(r"^\s*;\s*ps-t-shifted\s*$", re.IGNORECASE)
 END_FIELD_13_OLD_HASH = "b30cc5ad521e0700"
 END_FIELD_13_NEW_HASH = "1eaaa259e9a4285b"
+END_FIELD_13_SECTION_SUFFIX = "_13"
+END_FIELD_13_FILTER_INDEX = 202
+END_FIELD_13_DUPLICATE_POLICY = "overrule"
 
 START_INDEX = 1000
 SECTION_PREFIX = "ShaderOverridevs"
@@ -653,6 +656,7 @@ HASH_RULES: dict[int, list[str]] = {
 
 SECTION_HEADER_RE = re.compile(r"^\s*\[(?P<name>[^\]]+)\]\s*$")
 FILTER_INDEX_RE = re.compile(r"^\s*filter_index\s*=\s*(\d+)\s*(?:[;#].*)?$", re.IGNORECASE)
+ALLOW_DUPLICATE_HASH_RE = re.compile(r"^\s*allow_duplicate_hash\s*=\s*(\S+)\s*(?:[;#].*)?$", re.IGNORECASE)
 HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 
 
@@ -1349,25 +1353,195 @@ def apply_ps_t_shift_stage(content: str, newline: str) -> tuple[str, StageResult
     return new_content, StageResult("ps_t_shift", new_content != original, details)
 
 
+def section_name_equals(section: IniSection, name: str) -> bool:
+    return section.name.strip().casefold() == name.casefold()
+
+
+def find_ini_section(sections: list[IniSection], name: str) -> IniSection | None:
+    for section in sections:
+        if section_name_equals(section, name):
+            return section
+    return None
+
+
+def section_has_hash_value(section: IniSection, hash_value: str) -> bool:
+    target = hash_value.lower()
+    for raw_line in section.lines:
+        match = _HASH_RE.match(raw_line.rstrip("\r\n"))
+        if match and match.group(1).lower() == target:
+            return True
+    return False
+
+
+def section_has_duplicate_overrule(section: IniSection) -> bool:
+    for raw_line in section.lines:
+        match = ALLOW_DUPLICATE_HASH_RE.match(raw_line.rstrip("\r\n"))
+        if match and match.group(1).casefold() == END_FIELD_13_DUPLICATE_POLICY:
+            return True
+    return False
+
+
+def section_has_endfield_13_payload(section: IniSection) -> bool:
+    return (
+        section_has_hash_value(section, END_FIELD_13_NEW_HASH)
+        and extract_filter_index(section) == END_FIELD_13_FILTER_INDEX
+        and section_has_duplicate_overrule(section)
+    )
+
+
+def section_has_endfield_13_target_payload(section: IniSection) -> bool:
+    return (
+        section_has_hash_value(section, END_FIELD_13_OLD_HASH)
+        and extract_filter_index(section) == END_FIELD_13_FILTER_INDEX
+        and section_has_duplicate_overrule(section)
+    )
+
+
+def endfield_13_patch_section_name(section: IniSection) -> str:
+    return f"{section.name}{END_FIELD_13_SECTION_SUFFIX}"
+
+
+def find_endfield_13_target_sections(sections: list[IniSection]) -> list[IniSection]:
+    return [
+        section
+        for section in sections
+        if section_has_endfield_13_target_payload(section)
+    ]
+
+
+def endfield_13_patch_base_name(section: IniSection) -> str | None:
+    suffix = END_FIELD_13_SECTION_SUFFIX.casefold()
+    name = section.name.strip()
+    if not name.casefold().endswith(suffix):
+        return None
+    return name[:-len(END_FIELD_13_SECTION_SUFFIX)]
+
+
+def section_has_endfield_13_any_payload(section: IniSection) -> bool:
+    return (
+        (section_has_hash_value(section, END_FIELD_13_OLD_HASH) or section_has_hash_value(section, END_FIELD_13_NEW_HASH))
+        and extract_filter_index(section) == END_FIELD_13_FILTER_INDEX
+        and section_has_duplicate_overrule(section)
+    )
+
+
+def is_endfield_13_patch_section(section: IniSection, sections: list[IniSection]) -> bool:
+    if not section_has_endfield_13_payload(section):
+        return False
+
+    base_name = endfield_13_patch_base_name(section)
+    if not base_name:
+        return False
+
+    base_section = find_ini_section(sections, base_name)
+    return base_section is not None and section_has_endfield_13_any_payload(base_section)
+
+
+def find_endfield_13_restore_sections(sections: list[IniSection]) -> list[IniSection]:
+    return [
+        section
+        for section in sections
+        if section_has_endfield_13_payload(section)
+        and not is_endfield_13_patch_section(section, sections)
+    ]
+
+
+def has_endfield_13_patch_for_target(sections: list[IniSection], target: IniSection) -> bool:
+    patch_name = endfield_13_patch_section_name(target)
+    return any(
+        section_name_equals(section, patch_name)
+        or (
+            section_has_endfield_13_payload(section)
+            and section.name.casefold() == patch_name.casefold()
+        )
+        for section in sections
+    )
+
+
+def restore_endfield_13_section_hash(lines: list[str], section: IniSection) -> int:
+    changed = 0
+    for line_index in range(section.start, section.end):
+        raw_line = lines[line_index]
+        match = _HASH_RE.match(raw_line.rstrip("\r\n"))
+        if not match or match.group(1).lower() != END_FIELD_13_NEW_HASH:
+            continue
+        lines[line_index] = raw_line[:match.start(1)] + END_FIELD_13_OLD_HASH + raw_line[match.end(1):]
+        changed += 1
+    return changed
+
+
+def build_endfield_13_block_lines(section_name: str, newline: str, leading_blank: str) -> list[str]:
+    return [
+        leading_blank,
+        f"[{section_name}]{newline}",
+        f"hash = {END_FIELD_13_NEW_HASH}{newline}",
+        f"filter_index = {END_FIELD_13_FILTER_INDEX}{newline}",
+        f"allow_duplicate_hash = {END_FIELD_13_DUPLICATE_POLICY}{newline}",
+        newline,
+    ]
+
+
+def insert_endfield_13_block(lines: list[str], anchor: IniSection, newline: str) -> list[str]:
+    insert_at = anchor.end
+    while insert_at > anchor.start and not lines[insert_at - 1].strip():
+        insert_at -= 1
+
+    leading_blank = newline
+    if insert_at > 0 and not lines[insert_at - 1].endswith(("\n", "\r")):
+        leading_blank = newline + newline
+
+    block_lines = build_endfield_13_block_lines(endfield_13_patch_section_name(anchor), newline, leading_blank)
+    return lines[:insert_at] + block_lines + lines[anchor.end:]
+
+
+def needs_endfield_13_stage(content: str) -> bool:
+    lines = content.splitlines(keepends=True)
+    sections = collect_sections(lines)
+
+    if find_endfield_13_restore_sections(sections):
+        return True
+
+    return any(
+        not has_endfield_13_patch_for_target(sections, target)
+        for target in find_endfield_13_target_sections(sections)
+    )
+
+
 def apply_endfield_13_stage(content: str) -> tuple[str, StageResult]:
     original = content
     lines = content.splitlines(keepends=True)
-    changed = 0
-    out_lines: list[str] = []
+    sections = collect_sections(lines)
+    details: list[str] = []
 
-    for line in lines:
-        match = _HASH_RE.match(line)
-        if match and match.group(1).lower() == END_FIELD_13_OLD_HASH:
-            out_lines.append(line[:match.start(1)] + END_FIELD_13_NEW_HASH + line[match.end(1):])
-            changed += 1
-        else:
-            out_lines.append(line)
+    restored_sections = 0
+    restored_hashes = 0
+    for section in find_endfield_13_restore_sections(sections):
+        restored = restore_endfield_13_section_hash(lines, section)
+        if restored:
+            restored_sections += 1
+            restored_hashes += restored
 
-    if not changed:
-        return content, StageResult("1.3_fixer", False, [])
+    if restored_hashes:
+        details.append(
+            f"restored {restored_hashes} shader hash(es) in {restored_sections} section(s): "
+            f"{END_FIELD_13_NEW_HASH} -> {END_FIELD_13_OLD_HASH}"
+        )
 
-    new_content = "".join(out_lines)
-    details = [f"updated {changed} shader hash(es): {END_FIELD_13_OLD_HASH} -> {END_FIELD_13_NEW_HASH}"]
+    sections = collect_sections(lines)
+    newline = detect_newline(content)
+    inserted = 0
+
+    for target in reversed(find_endfield_13_target_sections(sections)):
+        if has_endfield_13_patch_for_target(sections, target):
+            continue
+        lines = insert_endfield_13_block(lines, target, newline)
+        inserted += 1
+        details.append(f"inserted {endfield_13_patch_section_name(target)} after {target.name}")
+        sections = collect_sections(lines)
+
+    new_content = "".join(lines)
+    if inserted:
+        details.insert(0, f"inserted {inserted} 1.3 shader override section(s)")
     return new_content, StageResult("1.3_fixer", new_content != original, details)
 
 
@@ -1711,7 +1885,7 @@ def detect_required_stages(content: str, mapping: HashMapping) -> tuple[str, ...
     if needs_ps_t_shift_stage(content):
         add_required_stage(required, "ps_t_shift")
 
-    if END_FIELD_13_OLD_HASH in hash_values or "ps_t_shift" in required:
+    if needs_endfield_13_stage(content) or "ps_t_shift" in required:
         add_required_stage(required, "1.3_fixer")
 
     return tuple(required)
@@ -1758,7 +1932,7 @@ def process_text(
         content, stage = apply_ps_t_shift_stage(content, newline)
         stages.append(stage)
 
-    if "1.3_fixer" in required_stages:
+    if "1.3_fixer" in required_stages or needs_endfield_13_stage(content):
         content, stage = apply_endfield_13_stage(content)
         stages.append(stage)
 
