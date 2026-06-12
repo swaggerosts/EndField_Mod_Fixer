@@ -5,7 +5,7 @@ a = Analysis(
     ['Endfield_mod_fixer_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('favicon.ico', '.'), ('MaoKenShiJinHei', 'MaoKenShiJinHei'), ('无缝地形等高线_爱给网_aigei_com.png', '.')],
+    datas=[('favicon.ico', '.'), ('MaoKenShiJinHei', 'MaoKenShiJinHei'), ('等高线.png', '.')],
     hiddenimports=[],
     hookspath=['pyinstaller_hooks'],
     hooksconfig={},
