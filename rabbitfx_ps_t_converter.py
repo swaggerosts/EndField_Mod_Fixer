@@ -35,6 +35,10 @@ BACKUP_RE = re.compile(
 )
 SECTION_RE = re.compile(r"^\s*\[(?P<name>[^\]]+)\]\s*$")
 PS_T_RE = re.compile(r"^(?P<indent>\s*)ps-t(?P<slot>\d+)(?P<eq>\s*=\s*)(?P<res>\S+)(?P<tail>.*)$", re.IGNORECASE)
+COMMENTED_PS_T_RE = re.compile(
+    r"^(?P<indent>\s*);(?P<body>\s*ps-t\d+\s*=.*)$",
+    re.IGNORECASE,
+)
 RABBITFX_RE = re.compile(
     r"^\s*Resource\\RabbitFX\\|^\s*run\s*=\s*CommandList\\RabbitFX\\(?:SetTextures|Run)",
     re.IGNORECASE,
@@ -54,6 +58,17 @@ class Conversion:
     slots: list[int]
     roles: list[str]
     action: str
+    slot_offset: int = 0
+
+
+@dataclass
+class TextureBinding:
+    index: int
+    slot: int
+    role: str
+    resource: str
+    comment_line: str
+    commented: bool = False
 
 
 @dataclass
@@ -117,6 +132,16 @@ def parse_slots(raw: str) -> set[int]:
     return slots
 
 
+def parse_slot_offset(raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid slot offset: {raw!r}") from exc
+    if value < -2 or value > 2:
+        raise argparse.ArgumentTypeError("slot offset must be one of -2, -1, 0, 1, 2")
+    return value
+
+
 def infer_role(resource: str) -> str | None:
     lowered = resource.lower()
     if "highlight" in lowered:
@@ -143,24 +168,113 @@ def infer_role(resource: str) -> str | None:
     return None
 
 
-def make_rabbitfx_lines(indent: str, role_resources: dict[str, str]) -> list[str]:
+def unique_role_resources(
+    bindings: list[TextureBinding],
+    roles: tuple[str, ...],
+    merge_same: bool = True,
+) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for role in roles:
+        for binding in bindings:
+            pair = (binding.role, binding.resource)
+            if binding.role != role:
+                continue
+            if merge_same and pair in seen:
+                continue
+            seen.add(pair)
+            pairs.append(pair)
+    return pairs
+
+
+def make_rabbitfx_group_lines(
+    indent: str,
+    bindings: list[TextureBinding],
+    roles: tuple[str, ...],
+    run_command: str,
+    merge_same: bool = True,
+) -> list[str]:
     lines: list[str] = []
-
-    for role in RABBITFX_SET_TEXTURE_ROLES:
-        resource = role_resources.get(role)
-        if resource:
-            lines.append(f"{indent}Resource\\RabbitFX\\{role} = ref {resource}")
-    if any(role in role_resources for role in RABBITFX_SET_TEXTURE_ROLES):
-        lines.append(f"{indent}run = {RABBITFX_SET_TEXTURES_RUN}")
-
-    for role in RABBITFX_EFFECT_ROLES:
-        resource = role_resources.get(role)
-        if resource:
-            lines.append(f"{indent}Resource\\RabbitFX\\{role} = ref {resource}")
-    if any(role in role_resources for role in RABBITFX_EFFECT_ROLES):
-        lines.append(f"{indent}run = {RABBITFX_EFFECTS_RUN}")
-
+    for role, resource in unique_role_resources(bindings, roles, merge_same=merge_same):
+        lines.append(f"{indent}Resource\\RabbitFX\\{role} = ref {resource}")
+    if lines:
+        lines.append(f"{indent}run = {run_command}")
     return lines
+
+
+def make_rabbitfx_lines(indent: str, bindings: list[TextureBinding], merge_same: bool = True) -> list[str]:
+    lines: list[str] = []
+    lines.extend(
+        make_rabbitfx_group_lines(
+            indent,
+            bindings,
+            RABBITFX_SET_TEXTURE_ROLES,
+            RABBITFX_SET_TEXTURES_RUN,
+            merge_same=merge_same,
+        )
+    )
+    lines.extend(
+        make_rabbitfx_group_lines(
+            indent,
+            bindings,
+            RABBITFX_EFFECT_ROLES,
+            RABBITFX_EFFECTS_RUN,
+            merge_same=merge_same,
+        )
+    )
+    return lines
+
+
+def uncomment_generated_ps_t_line(line: str) -> str | None:
+    match = COMMENTED_PS_T_RE.match(line)
+    if not match:
+        return None
+    return f"{match.group('indent')}{match.group('body').lstrip()}"
+
+
+def parse_texture_binding(
+    index: int,
+    line: str,
+    slots: set[int] | None,
+    slot_offset: int,
+    commented: bool = False,
+) -> TextureBinding | None:
+    source_line = uncomment_generated_ps_t_line(line) if commented else line
+    if source_line is None or "CheckTextureOverride" in source_line:
+        return None
+
+    match = PS_T_RE.match(source_line)
+    if not match:
+        return None
+
+    slot = int(match.group("slot"))
+    if slots is not None and slot not in slots:
+        return None
+
+    role = infer_role(match.group("res"))
+    if not role:
+        return None
+
+    if commented:
+        comment_line = source_line
+        effective_slot = slot
+    else:
+        comment_line, effective_slot = offset_ps_t_line(source_line, slot_offset)
+    if effective_slot is None:
+        return None
+
+    return TextureBinding(
+        index=index,
+        slot=effective_slot,
+        role=role,
+        resource=match.group("res"),
+        comment_line=comment_line,
+        commented=commented,
+    )
+
+
+def offset_label(offset: int) -> str:
+    return f"{offset:+d}"
 
 
 def has_cross_ib(content: str) -> bool:
@@ -188,7 +302,24 @@ def section_has_conditional_texture_bindings(lines: list[str]) -> bool:
     return False
 
 
-def shift_ps_t_line(line: str, slots: set[int] | None) -> tuple[str, int | None, str | None]:
+def offset_ps_t_line(line: str, offset: int) -> tuple[str, int | None]:
+    match = PS_T_RE.match(line)
+    if not match:
+        return line, None
+
+    slot = int(match.group("slot"))
+    shifted_slot = slot + offset
+    if shifted_slot < 0:
+        return line, None
+
+    shifted = (
+        f"{match.group('indent')}ps-t{shifted_slot}"
+        f"{match.group('eq')}{match.group('res')}{match.group('tail')}"
+    )
+    return shifted, shifted_slot
+
+
+def shift_ps_t_line(line: str, slots: set[int] | None, offset: int = 2) -> tuple[str, int | None, str | None]:
     stripped = line.lstrip()
     if stripped.startswith(";") or "CheckTextureOverride" in line:
         return line, None, None
@@ -205,10 +336,9 @@ def shift_ps_t_line(line: str, slots: set[int] | None) -> tuple[str, int | None,
     if not role:
         return line, None, None
 
-    shifted = (
-        f"{match.group('indent')}ps-t{slot + 2}"
-        f"{match.group('eq')}{match.group('res')}{match.group('tail')}"
-    )
+    shifted, shifted_slot = offset_ps_t_line(line, offset)
+    if shifted_slot is None or shifted == line:
+        return line, None, None
     return shifted, slot, role
 
 
@@ -218,6 +348,8 @@ def convert_content(
     comment_originals: bool,
     force: bool,
     strategy: str = "auto",
+    slot_offset: int = 0,
+    merge_same: bool = True,
 ) -> tuple[str, list[Conversion]]:
     lines = content.splitlines()
     had_final_newline = content.endswith(("\n", "\r"))
@@ -254,45 +386,55 @@ def convert_content(
                 )
             continue
 
-        if not force and any(RABBITFX_RE.search(line) and not line.lstrip().startswith(";") for line in section_lines):
-            continue
-
-        target_indexes: list[int] = []
-        role_resources: dict[str, str] = {}
-        role_slots: dict[str, int] = {}
+        active_rabbitfx_indexes = [
+            index
+            for index in range(section.start + 1, section.end)
+            if RABBITFX_RE.search(output[index]) and not output[index].lstrip().startswith(";")
+        ]
+        active_bindings: list[TextureBinding] = []
+        commented_bindings: list[TextureBinding] = []
         first_indent = ""
 
         for index in range(section.start + 1, section.end):
-            line = lines[index]
+            line = output[index]
             stripped = line.lstrip()
-            if stripped.startswith(";") or "CheckTextureOverride" in line:
+            if "CheckTextureOverride" in line:
                 continue
 
-            match = PS_T_RE.match(line)
-            if not match:
+            if stripped.startswith(";"):
+                if active_rabbitfx_indexes:
+                    binding = parse_texture_binding(index, line, slots, slot_offset, commented=True)
+                    if binding is not None:
+                        commented_bindings.append(binding)
+                        if not first_indent:
+                            first_indent = uncomment_generated_ps_t_line(line) or ""
+                            first_indent = PS_T_RE.match(first_indent).group("indent") if PS_T_RE.match(first_indent) else ""
                 continue
 
-            slot = int(match.group("slot"))
-            if slots is not None and slot not in slots:
-                continue
+            binding = parse_texture_binding(index, line, slots, slot_offset, commented=False)
+            if binding is not None:
+                active_bindings.append(binding)
+                if not first_indent:
+                    first_indent = PS_T_RE.match(line).group("indent") if PS_T_RE.match(line) else ""
 
-            role = infer_role(match.group("res"))
-            if not role:
-                continue
-
-            if not first_indent:
-                first_indent = match.group("indent")
-            target_indexes.append(index)
-            role_resources[role] = match.group("res")
-            role_slots[role] = slot
-
-        if not target_indexes or not role_resources:
+        restore_from_generated_comments = bool(active_rabbitfx_indexes and commented_bindings)
+        if active_rabbitfx_indexes and not restore_from_generated_comments and not force:
             continue
 
+        bindings = commented_bindings if restore_from_generated_comments else active_bindings
+        if not bindings:
+            continue
+
+        target_indexes = [binding.index for binding in bindings]
+        if restore_from_generated_comments:
+            target_indexes.extend(active_rabbitfx_indexes)
+
         first = min(target_indexes)
-        replacement = make_rabbitfx_lines(first_indent, role_resources)
+        replacement = make_rabbitfx_lines(first_indent, bindings, merge_same=merge_same)
+        if not replacement:
+            continue
         if comment_originals:
-            replacement.extend(";" + lines[index] for index in target_indexes)
+            replacement.extend(";" + binding.comment_line for binding in bindings)
 
         for index in sorted(target_indexes, reverse=True):
             del output[index]
@@ -304,9 +446,10 @@ def convert_content(
         conversions.append(
             Conversion(
                 section=section.name,
-                slots=sorted(role_slots.values()),
-                roles=[role for role in RABBITFX_ROLES if role in role_resources],
+                slots=sorted({binding.slot for binding in bindings}),
+                roles=[role for role in RABBITFX_ROLES if any(binding.role == role for binding in bindings)],
                 action="rabbitfx",
+                slot_offset=slot_offset,
             )
         )
 
@@ -353,6 +496,8 @@ def process_file(
     comment_originals: bool,
     force: bool,
     strategy: str,
+    slot_offset: int,
+    merge_same: bool,
     dry_run: bool,
     stamp: str,
 ) -> FileResult:
@@ -363,6 +508,8 @@ def process_file(
         comment_originals=comment_originals,
         force=force,
         strategy=strategy,
+        slot_offset=slot_offset,
+        merge_same=merge_same,
     )
     changed = new_content != content
     if changed and not dry_run:
@@ -389,6 +536,17 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("auto", "rabbitfx", "shift"),
         default="auto",
         help="Fix strategy. auto uses +2 shift for cross-IB/conditional sections and RabbitFX otherwise.",
+    )
+    parser.add_argument(
+        "--slot-offset",
+        type=parse_slot_offset,
+        default=0,
+        help="RabbitFX mode ps-t slot offset before replacement. Valid values: -2, -1, 0, 1, 2. Default: 0.",
+    )
+    parser.add_argument(
+        "--no-merge-same-resources",
+        action="store_true",
+        help="Keep repeated RabbitFX role/resource entries instead of merging exact duplicates. SetTextures still emits one run line.",
     )
     parser.add_argument("--include-backups", action="store_true", help="Include backup-looking files when scanning a directory.")
     parser.add_argument("--include-disabled", action="store_true", help="Also process paths whose folder name starts with DISABLED.")
@@ -421,6 +579,8 @@ def main(argv: list[str] | None = None) -> int:
             comment_originals=not args.delete_originals,
             force=args.force,
             strategy=args.strategy,
+            slot_offset=args.slot_offset,
+            merge_same=not args.no_merge_same_resources,
             dry_run=args.dry_run,
             stamp=stamp,
         )
@@ -436,7 +596,8 @@ def main(argv: list[str] | None = None) -> int:
             if conversion.action == "shift+2":
                 print(f"  - {conversion.section}: {slots} shifted +2 ({roles})")
             else:
-                print(f"  - {conversion.section}: {slots} -> RabbitFX {roles}")
+                offset = f" offset {offset_label(conversion.slot_offset)}" if conversion.slot_offset else ""
+                print(f"  - {conversion.section}: {slots} -> RabbitFX {roles}{offset}")
 
     if changed_count == 0:
         print("No files changed. Skipped.")

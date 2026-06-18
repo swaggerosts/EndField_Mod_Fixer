@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import codecs
+import contextlib
 import json
+import os
 import re
 import shutil
 import sys
@@ -17,6 +19,7 @@ from typing import Any
 
 BACKUP_DIR_NAME = ".efmi_unified_backups"
 BACKUP_MANIFEST = "manifest.json"
+DEFAULT_BACKUP_RETENTION_LIMIT = 15
 DISABLED_PREFIX = "DISABLED"
 OLD_BACKUP_NAME_RE = re.compile(r"\.ini\.backup\.\d{8}_\d{6}$", re.IGNORECASE)
 FIXMENU_OLD_TOKEN = "ps-t102"
@@ -28,6 +31,205 @@ LEGACY_ENDFIELD_SOURCE = "endfield_mod_fix.py marker"
 LEGACY_PS_T_SOURCE = "ps_t_shift.py DISABLED backup marker"
 LEGACY_PS_T_LINE_SOURCE = "legacy ps-t-shifted marker"
 SILENT_STAGE_NAMES = {"legacy_marker_cleanup"}
+WET_FIX_ENV_VAR = "EFMI_WET_FIX_SOURCE"
+WET_FIX_SOURCE_DIR_PARTS = ("\u5176\u4ed6", "\u529f\u80fd-\u6e7f\u6da6\u6548\u679c\u4fee\u590d")
+WET_FIX_TEMPLATE_PREFIX = "000_"
+WET_FIX_INI_PREFIX = "00_"
+WET_FIX_OUTPUT_SUFFIX = "_WetFix.ini"
+WET_FIX_DEFAULT_TEXTURE_DIR = "Texture"
+WET_FIX_STAGE_NAME = "wet_fix"
+WET_FIX_ASSET_STAGE_NAME = "wet_fix_asset"
+WET_FIX_OLD_RESOURCE_PATH = r"Resource\0000_WetFX\WetMap"
+WET_FIX_NEW_RESOURCE_PATH = r"Resource\RabbitFX\Rainmap"
+WET_FIX_NEW_RUN_COMMAND = r"CommandList\RabbitFX\SetTextures"
+
+BUILTIN_WET_FIX_TEMPLATES: tuple[dict[str, object], ...] = ({'name': 'Akekuri',
+  'overrides': (('TextureOverrideIB_Akekuri', '809f7872', 114840, 'ResourceWetMap_Akekuri'),
+                ('TextureOverrideIB_Akekuri_LOD', '0090cda2', 68469, 'ResourceWetMap_Akekuri')),
+  'resources': (('ResourceWetMap_Akekuri', 'wet_map.dds'),)},
+ {'name': 'Alesh',
+  'overrides': (('TextureOverrideIB_Alesh', '00532aa6', 125835, 'ResourceWetMap_Alesh'),
+                ('TextureOverrideIB_Alesh_LOD', '58a61a76', 70572, 'ResourceWetMap_Alesh')),
+  'resources': (('ResourceWetMap_Alesh', 'wet_map.dds'),)},
+ {'name': 'Antal',
+  'overrides': (('TextureOverrideIB_Antal', 'dd894994', 81438, 'ResourceWetMap_Antal'),
+                ('TextureOverrideIB_Antal_LOD', '8a4f2d38', 72645, 'ResourceWetMap_Antal')),
+  'resources': (('ResourceWetMap_Antal', 'wet_map.dds'),)},
+ {'name': 'Arclight',
+  'overrides': (('TextureOverrideIB_Arclight', '2cc316a9', 83589, 'ResourceWetMap_Arclight'),
+                ('TextureOverrideIB_Arclight_LOD', '5609cf41', 33312, 'ResourceWetMap_Arclight')),
+  'resources': (('ResourceWetMap_Arclight', 'wet_map.dds'),)},
+ {'name': 'Ardelia',
+  'overrides': (('TextureOverrideIB_Ardelia_Accessories', 'b9623e31', 11112, 'ResourceWetMap_Ardelia_Accessories'),
+                ('TextureOverrideIB_Ardelia_Accessories_LOD', '5a0b7cf0', 4797, 'ResourceWetMap_Ardelia_Accessories'),
+                ('TextureOverrideIB_Ardelia_Accessories2', '36a08ea0', 83514, 'ResourceWetMap_Ardelia_Accessories2'),
+                ('TextureOverrideIB_Ardelia_Accessories2_LOD',
+                 '467076b1',
+                 43773,
+                 'ResourceWetMap_Ardelia_Accessories2'),
+                ('TextureOverrideIB_Ardelia_Thighhigh', '99451bd3', 3879, 'ResourceWetMap_Ardelia_Thighhigh'),
+                ('TextureOverrideIB_Ardelia_Thighhigh_LOD', '4532f3b9', 1779, 'ResourceWetMap_Ardelia_Thighhigh'),
+                ('TextureOverrideIB_Ardelia_body', 'c8197c5b', 53472, 'ResourceWetMap_Ardelia_body'),
+                ('TextureOverrideIB_Ardelia_body_LOD', '3d7defd8', 24768, 'ResourceWetMap_Ardelia_body')),
+  'resources': (('ResourceWetMap_Ardelia_Accessories', 'wet_map_Accessories.dds'),
+                ('ResourceWetMap_Ardelia_Accessories2', 'wet_map_Accessories2.dds'),
+                ('ResourceWetMap_Ardelia_Thighhigh', 'wet_map_thighhighs.dds'),
+                ('ResourceWetMap_Ardelia_body', 'wet_map_body.dds'))},
+ {'name': 'Avywenna',
+  'overrides': (('TextureOverrideIB_Avywenna', '9abe5753', 156945, 'ResourceWetMap_Avywenna'),
+                ('TextureOverrideIB_Avywenna_LOD', '1bd4c9ac', 56931, 'ResourceWetMap_Avywenna')),
+  'resources': (('ResourceWetMap_Avywenna', 'wet_map.dds'),)},
+ {'name': 'Catcher',
+  'overrides': (('TextureOverrideIB_Catcher_Armor1', 'ccacd117', 204, 'ResourceWetMap_Catcher_Armor'),
+                ('TextureOverrideIB_Catcher_Armor2', '7a23c2e9', 35979, 'ResourceWetMap_Catcher_Armor'),
+                ('TextureOverrideIB_Catcher_Armor1_LOD', '14b31705', 132, 'ResourceWetMap_Catcher_Armor'),
+                ('TextureOverrideIB_Catcher_Armor2_LOD', '36f0e903', 22446, 'ResourceWetMap_Catcher_Armor'),
+                ('TextureOverrideIB_Catcher_Body', '8680e912', 80046, 'ResourceWetMap_Catcher_Body'),
+                ('TextureOverrideIB_Catcher_Body_LOD', 'bc43852e', 47640, 'ResourceWetMap_Catcher_Body')),
+  'resources': (('ResourceWetMap_Catcher_Armor', 'wet_map_Armor.dds'),
+                ('ResourceWetMap_Catcher_Body', 'wet_map_Body.dds'))},
+ {'name': 'ChenQianyu',
+  'overrides': (('TextureOverrideIB_ChenQianyu1', 'f80227f2', 139392, 'ResourceWetMap_ChenQianyu'),
+                ('TextureOverrideIB_ChenQianyu2', 'ae154b07', 9477, 'ResourceWetMap_ChenQianyu'),
+                ('TextureOverrideIB_ChenQianyu1_LOD', '429e5708', 34362, 'ResourceWetMap_ChenQianyu'),
+                ('TextureOverrideIB_ChenQianyu2_LOD', 'fc19ffe3', 5001, 'ResourceWetMap_ChenQianyu')),
+  'resources': (('ResourceWetMap_ChenQianyu', 'wet_map.dds'),)},
+ {'name': 'DaPan',
+  'overrides': (('TextureOverrideIB_DaPan_Body', '8601be54', 33858, 'ResourceWetMap_DaPan_Body'),
+                ('TextureOverrideIB_DaPan_Cloth', '6e9617ad', 78624, 'ResourceWetMap_DaPan_Cloth'),
+                ('TextureOverrideIB_DaPan_Cloth_LOD', '081c9151', 19941, 'ResourceWetMap_DaPan_Cloth'),
+                ('TextureOverrideIB_DaPan_Body_LOD', '290d46ac', 15309, 'ResourceWetMap_DaPan_Body')),
+  'resources': (('ResourceWetMap_DaPan_Body', 'wet_map_Body.dds'),
+                ('ResourceWetMap_DaPan_Cloth', 'wet_map_Cloth.dds'))},
+ {'name': 'Ember',
+  'overrides': (('TextureOverrideIB_Ember_Armor', '028bdd2a', 99162, 'ResourceWetMap_Ember_Armor'),
+                ('TextureOverrideIB_Ember_Cloth', 'ed955584', 3978, 'ResourceWetMap_Ember_Cloth'),
+                ('TextureOverrideIB_Ember_Cloth2', '6f299713', 41334, 'ResourceWetMap_Ember_Cloth'),
+                ('TextureOverrideIB_Ember_Cloth_LOD', 'b53a5ba8', 1368, 'ResourceWetMap_Ember_Cloth'),
+                ('TextureOverrideIB_Ember_Cloth2_LOD', 'ef77087e', 18642, 'ResourceWetMap_Ember_Cloth'),
+                ('TextureOverrideIB_Ember_Armor_LOD', '48557ca4', 57693, 'ResourceWetMap_Ember_Armor')),
+  'resources': (('ResourceWetMap_Ember_Armor', 'wet_map_Armor.dds'),
+                ('ResourceWetMap_Ember_Cloth', 'wet_map_Cloth.dds'))},
+ {'name': 'Endministrator_F',
+  'overrides': (('TextureOverrideIB_FEndmin', '9cd919fa', 101994, 'ResourceWetMap_FEndmin'),
+                ('TextureOverrideIB_FEndmin_LOD', '9ba0fdcb', 59301, 'ResourceWetMap_FEndmin')),
+  'resources': (('ResourceWetMap_FEndmin', 'wet_map.dds'),)},
+ {'name': 'Endministrator_M',
+  'overrides': (('TextureOverrideIB_Endministrator_M1', 'b3bf2e13', 46437, 'ResourceWetMap_Endministrator_M1'),
+                ('TextureOverrideIB_Endministrator_M2', 'b57bbb30', 69195, 'ResourceWetMap_Endministrator_M2'),
+                ('TextureOverrideIB_Endministrator_M1_LOD', '9b189efd', 17052, 'ResourceWetMap_Endministrator_M1'),
+                ('TextureOverrideIB_Endministrator_M2_LOD', '7cdfa2a3', 27255, 'ResourceWetMap_Endministrator_M2')),
+  'resources': (('ResourceWetMap_Endministrator_M1', 'wet_map_Body1.dds'),
+                ('ResourceWetMap_Endministrator_M2', 'wet_map_Body2.dds'))},
+ {'name': 'Estella',
+  'overrides': (('TextureOverrideIB_Estella', '0f670f77', 111693, 'ResourceWetMap_Estella'),
+                ('TextureOverrideIB_Estella2', 'fa0d4a01', 28500, 'ResourceWetMap_Estella'),
+                ('TextureOverrideIB_Estella3', '7d15098a', 669, 'ResourceWetMap_Estella'),
+                ('TextureOverrideIB_Estella_LOD', '3c12d828', 71076, 'ResourceWetMap_Estella'),
+                ('TextureOverrideIB_Estella2_LOD', '4293dd55', 7665, 'ResourceWetMap_Estella'),
+                ('TextureOverrideIB_Estella3_LOD', '54f03f79', 411, 'ResourceWetMap_Estella')),
+  'resources': (('ResourceWetMap_Estella', 'wet_map.dds'),)},
+ {'name': 'Fluorite',
+  'overrides': (('TextureOverrideIB_Fluorite', '545dfa3b', 109017, 'ResourceWetMap_Fluorite'),
+                ('TextureOverrideIB_Fluorite1', '7a01407e', None, 'ResourceWetMap_Fluorite'),
+                ('TextureOverrideIB_Fluorite2', '84c7926d', 1428, 'ResourceWetMap_Fluorite'),
+                ('TextureOverrideIB_Fluorite_LOD', '64153b2b', 61299, 'ResourceWetMap_Fluorite'),
+                ('TextureOverrideIB_Fluorite2_LOD', '533b4170', 1008, 'ResourceWetMap_Fluorite'),
+                ('TextureOverrideIB_Fluorite3', 'a68526c8', 78, 'ResourceWetMap_Fluorite3'),
+                ('TextureOverrideIB_Fluorite3_LOD', '1c6d9af6', 48, 'ResourceWetMap_Fluorite3')),
+  'resources': (('ResourceWetMap_Fluorite', 'wet_map_Body.dds'),
+                ('ResourceWetMap_Fluorite3', 'wet_map_unidetified.dds'))},
+ {'name': 'Gilberta',
+  'overrides': (('TextureOverrideIB_Gilberta', '8c41c63c', 167442, 'ResourceWetMap_Gilberta'),
+                ('TextureOverrideIB_Gilberta_LOD', 'e8b8a8db', 51567, 'ResourceWetMap_Gilberta')),
+  'resources': (('ResourceWetMap_Gilberta', 'wet_map.dds'),)},
+ {'name': 'Laevatain',
+  'overrides': (('TextureOverrideIB_Laevatain_Body', '6ec0fbe0', 102927, 'ResourceWetMap_Laevatain_Body'),
+                ('TextureOverrideIB_Laevatain_Skirt1', '737e7030', 61923, 'ResourceWetMap_Laevatain_Skirt'),
+                ('TextureOverrideIB_Laevatain_Skirt2', 'b64211a7', 21489, 'ResourceWetMap_Laevatain_Skirt'),
+                ('TextureOverrideIB_Laevatain_Crescent', 'ccfd364a', 7698, 'ResourceWetMap_Laevatain_Crescent'),
+                ('TextureOverrideIB_Laevatain_Body_LOD', '59107a00', 37836, 'ResourceWetMap_Laevatain_Body'),
+                ('TextureOverrideIB_Laevatain_Skirt1_LOD', '68fc2fef', 16953, 'ResourceWetMap_Laevatain_Skirt'),
+                ('TextureOverrideIB_Laevatain_Skirt2_LOD', '8ce1712c', 6876, 'ResourceWetMap_Laevatain_Skirt'),
+                ('TextureOverrideIB_Laevatain_Crescent_LOD', '3190d237', 4500, 'ResourceWetMap_Laevatain_Crescent')),
+  'resources': (('ResourceWetMap_Laevatain_Body', 'wet_map_Body.dds'),
+                ('ResourceWetMap_Laevatain_Skirt', 'wet_map_Skirt.dds'),
+                ('ResourceWetMap_Laevatain_Crescent', 'wet_map_Crescent.dds'))},
+ {'name': 'LastRite',
+  'overrides': (('TextureOverrideIB_LastRite1', '1f3349f0', 65007, 'ResourceWetMap_LastRite'),
+                ('TextureOverrideIB_LastRite2', '6f8b37e5', 114765, 'ResourceWetMap_LastRite'),
+                ('TextureOverrideIB_LastRite1_LOD', '72a49f78', 23694, 'ResourceWetMap_LastRite'),
+                ('TextureOverrideIB_LastRite2_LOD', '6ce07f59', 41892, 'ResourceWetMap_LastRite')),
+  'resources': (('ResourceWetMap_LastRite', 'wet_map.dds'),)},
+ {'name': 'Lifeng',
+  'overrides': (('TextureOverrideIB_Lifeng_Hand', 'c39513f5', 110691, 'ResourceWetMap_Lifeng_Hand'),
+                ('TextureOverrideIB_Lifeng_Body', '8100087b', 76335, 'ResourceWetMap_Lifeng_Body'),
+                ('TextureOverrideIB_Lifeng_Hand_LOD', '57473cb4', 49692, 'ResourceWetMap_Lifeng_Hand'),
+                ('TextureOverrideIB_Lifeng_Body_LOD', '38d56a87', 25266, 'ResourceWetMap_Lifeng_Body')),
+  'resources': (('ResourceWetMap_Lifeng_Hand', 'wet_map_Hand.dds'),
+                ('ResourceWetMap_Lifeng_Body', 'wet_map_Body.dds'))},
+ {'name': 'Perlica',
+  'overrides': (('TextureOverrideIB_Perlica_dress', '5eeb63d5', 70656, 'ResourceWetMap_Perlica_dress'),
+                ('TextureOverrideIB_Perlica_dress_LOD', 'd2745ee4', 41022, 'ResourceWetMap_Perlica_dress'),
+                ('TextureOverrideIB_Perlica_jacket', '28847e3b', 78186, 'ResourceWetMap_Perlica_jacket'),
+                ('TextureOverrideIB_Perlica_jacket_LOD', '2c6dac7e', 34161, 'ResourceWetMap_Perlica_jacket'),
+                ('TextureOverrideIB_Perlica_pantyhose', '40e3cc9b', 8460, 'ResourceWetMap_Perlica_pantyhose'),
+                ('TextureOverrideIB_Perlica_pantyhose_LOD', 'b03ae6b4', 4986, 'ResourceWetMap_Perlica_pantyhose'),
+                ('TextureOverrideIB_Perlica_skirt', '80252467', 2178, 'ResourceWetMap_Perlica_skirt'),
+                ('TextureOverrideIB_Perlica_skirt_LOD', '859e2f34', 891, 'ResourceWetMap_Perlica_skirt')),
+  'resources': (('ResourceWetMap_Perlica_dress', 'wet_map_Dress.dds'),
+                ('ResourceWetMap_Perlica_jacket', 'wet_map_Jacket.dds'),
+                ('ResourceWetMap_Perlica_pantyhose', 'wet_map_Pantyhose.dds'),
+                ('ResourceWetMap_Perlica_skirt', 'wet_map_Skirt.dds'))},
+ {'name': 'Pogranichnik',
+  'overrides': (('TextureOverrideIB_Pogranichnik_Lower', '77990575', 77412, 'ResourceWetMap_Pogranichnik_Lower'),
+                ('TextureOverrideIB_Pogranichnik_Upper', '245c0cd3', 112620, 'ResourceWetMap_Pogranichnik_Upper'),
+                ('TextureOverrideIB_Pogranichnik_Lower_LOD', 'e7b67ff7', 26439, 'ResourceWetMap_Pogranichnik_Lower'),
+                ('TextureOverrideIB_Pogranichnik_Upper_LOD', '56ff3728', 44139, 'ResourceWetMap_Pogranichnik_Upper')),
+  'resources': (('ResourceWetMap_Pogranichnik_Lower', 'wet_map_Lower.dds'),
+                ('ResourceWetMap_Pogranichnik_Upper', 'wet_map_Upper.dds'))},
+ {'name': 'Snowshine',
+  'overrides': (('TextureOverrideIB_Snowshine1', 'b4310e71', 73359, 'ResourceWetMap_Snowshine1'),
+                ('TextureOverrideIB_Snowshine2', '0671628a', 87120, 'ResourceWetMap_Snowshine2'),
+                ('TextureOverrideIB_Snowshine1_LOD', '0fdffe8c', None, 'ResourceWetMap_Snowshine1'),
+                ('TextureOverrideIB_Snowshine2_LOD', '77fab778', None, 'ResourceWetMap_Snowshine2')),
+  'resources': (('ResourceWetMap_Snowshine1', 'wet_map_1.dds'), ('ResourceWetMap_Snowshine2', 'wet_map_2.dds'))},
+ {'name': 'Tangtang',
+  'overrides': (('TextureOverrideIB_Tangtang_cloth1', 'b5915079', 13728, 'ResourceWetMap_Tangtang_cloth'),
+                ('TextureOverrideIB_Tangtang_cloth2', 'eddaabb8', 110412, 'ResourceWetMap_Tangtang_cloth'),
+                ('TextureOverrideIB_Tangtang_jacket1', '3f9d0528', 9504, 'ResourceWetMap_Tangtang_jacket'),
+                ('TextureOverrideIB_Tangtang_jacket2', '8a76f261', 27039, 'ResourceWetMap_Tangtang_jacket'),
+                ('TextureOverrideIB_Tangtang_cloth1_LOD', 'a3272e57', 6483, 'ResourceWetMap_Tangtang_cloth'),
+                ('TextureOverrideIB_Tangtang_cloth2_LOD', '0e74012c', 48447, 'ResourceWetMap_Tangtang_cloth'),
+                ('TextureOverrideIB_Tangtang_jacket1_LOD', '7a5ccaa0', 12267, 'ResourceWetMap_Tangtang_jacket'),
+                ('TextureOverrideIB_Tangtang_jacket2_LOD', 'eb319e54', 5565, 'ResourceWetMap_Tangtang_jacket')),
+  'resources': (('ResourceWetMap_Tangtang_cloth', 'wet_map_cloth.dds'),
+                ('ResourceWetMap_Tangtang_jacket', 'wet_map_jacket.dds'))},
+ {'name': 'Wulfgang',
+  'overrides': (('TextureOverrideIB_Wulfgang_Body', '1ff0800e', 75222, 'ResourceWetMap_Wulfgang_Body'),
+                ('TextureOverrideIB_Wulfgang_Jacket', 'fd763e59', 66558, 'ResourceWetMap_Wulfgang_Jacket'),
+                ('TextureOverrideIB_Wulfgang_Body_LOD', '593bfaa5', 33708, 'ResourceWetMap_Wulfgang_Body'),
+                ('TextureOverrideIB_Wulfgang_Jacket_LOD', '5f597f6d', 32775, 'ResourceWetMap_Wulfgang_Jacket')),
+  'resources': (('ResourceWetMap_Wulfgang_Body', 'wet_map_Body.dds'),
+                ('ResourceWetMap_Wulfgang_Jacket', 'wet_map_Jacket.dds'))},
+ {'name': 'Xaihi',
+  'overrides': (('TextureOverrideIB_Xaihi1', '007cfd9c', 97986, 'ResourceWetMap_Xaihi'),
+                ('TextureOverrideIB_Xaihi2', '84d40040', 20964, 'ResourceWetMap_Xaihi'),
+                ('TextureOverrideIB_Xaihi3', '1d92013a', 6264, 'ResourceWetMap_Xaihi'),
+                ('TextureOverrideIB_Xaihi1_LOD', 'f8c62748', 54216, 'ResourceWetMap_Xaihi'),
+                ('TextureOverrideIB_Xaihi2_LOD', 'a36edd49', 5697, 'ResourceWetMap_Xaihi'),
+                ('TextureOverrideIB_Xaihi3_LOD', 'a0ed1d57', 4290, 'ResourceWetMap_Xaihi')),
+  'resources': (('ResourceWetMap_Xaihi', 'wet_map.dds'),)},
+ {'name': 'Yvonne',
+  'overrides': (('TextureOverrideIB_Yvonne_Body', '586b4574', 123174, 'ResourceWetMap_Yvonne_Body'),
+                ('TextureOverrideIB_Yvonne_Pants', 'd5cc14a2', 6192, 'ResourceWetMap_Yvonne_Body'),
+                ('TextureOverrideIB_Yvonne_Tail', '06e91fc9', 20331, 'ResourceWetMap_Yvonne_Tail'),
+                ('TextureOverrideIB_Yvonne_Tail_LOD', '82993ed5', 6957, 'ResourceWetMap_Yvonne_Tail'),
+                ('TextureOverrideIB_Yvonne_Body_LOD', 'b7808834', 48711, 'ResourceWetMap_Yvonne_Body'),
+                ('TextureOverrideIB_Yvonne_Pants_LOD', '3cdaab07', 3750, 'ResourceWetMap_Yvonne_Body')),
+  'resources': (('ResourceWetMap_Yvonne_Body', 'wet_map_Body.dds'),
+                ('ResourceWetMap_Yvonne_Phone', 'wet_map_Phone.dds'),
+                ('ResourceWetMap_Yvonne_Tail', 'wet_map_Tail.dds'))})
 
 
 CHARACTERS = [
@@ -415,6 +617,12 @@ SUBSTITUTIONS: list[tuple[str, str]] = [
 
 _HASH_RE = re.compile(r"^\s*hash\s*=\s*([0-9a-fA-F]+)", re.IGNORECASE)
 _MIC_RE = re.compile(r"^\s*match_index_count\s*=", re.IGNORECASE)
+_MIC_VALUE_RE = re.compile(r"^\s*match_index_count\s*=\s*(\d+)", re.IGNORECASE)
+_MATCH_PRIORITY_RE = re.compile(r"^(?P<prefix>\s*match_priority\s*=\s*)(?P<value>-?\d+)(?P<suffix>\s*(?:[;#].*)?)$", re.IGNORECASE)
+_WET_RAINMAP_BIND_RE = re.compile(r"^\s*Resource\\[^\r\n=]*(?:WetMap|Rainmap)\s*=", re.IGNORECASE)
+_FILENAME_VALUE_RE = re.compile(r"^(?P<prefix>\s*filename\s*=\s*)(?P<value>[^;#\r\n]+?)(?P<suffix>\s*(?:[;#].*)?)$", re.IGNORECASE)
+_WET_FIX_RESOURCE_BIND_RE = re.compile(r"^(?P<prefix>\s*)Resource\\(?:0000_WetFX|RabbitFX)\\(?:WetMap|Rainmap)(?P<suffix>\s*=.*)$", re.IGNORECASE)
+_WET_FIX_RUN_RE = re.compile(r"^(?P<prefix>\s*run\s*=\s*)CommandList\\(?:0000_WetFX\\BindWetMap|RabbitFX\\SetTextures)(?P<suffix>\s*(?:[;#].*)?)$", re.IGNORECASE)
 _SECTION_RE = re.compile(r"^\s*\[(.+)\]\s*$")
 _RUN_CMD_RE = re.compile(r"^\s*run\s*=\s*(CommandList_Draw_\S+)", re.IGNORECASE)
 _OBJ_DET_RE = re.compile(r"^\s*\$object_detected\s*=\s*1", re.IGNORECASE)
@@ -684,9 +892,14 @@ class FilePlan:
     new_text: str
     encoding: str
     stages: list[StageResult]
+    existed_before: bool = True
+    original_bytes: bytes | None = None
+    new_bytes: bytes | None = None
 
     @property
     def changed(self) -> bool:
+        if self.original_bytes is not None or self.new_bytes is not None:
+            return self.original_bytes != self.new_bytes
         return self.new_text != self.original_text
 
 
@@ -697,6 +910,8 @@ class RunOptions:
     include_disabled: bool = False
     force_new_version: bool = False
     enable_fixmenu: bool = False
+    enable_wet_fix: bool = False
+    backup_limit: int = DEFAULT_BACKUP_RETENTION_LIMIT
 
 
 @dataclass
@@ -706,6 +921,30 @@ class FixPlan:
     file_plans: list[FilePlan]
     hotfix_files: list[Path]
     skipped_new_version: int
+    backup_limit: int = DEFAULT_BACKUP_RETENTION_LIMIT
+
+
+@dataclass(frozen=True)
+class WetFixAsset:
+    filename: str
+    source_path: Path
+
+
+@dataclass(frozen=True)
+class WetFixTemplate:
+    name: str
+    source_dir: Path
+    ini_path: Path
+    ini_text: str
+    encoding: str
+    pairs: frozenset[tuple[str, int]]
+    assets: tuple[WetFixAsset, ...]
+
+
+@dataclass(frozen=True)
+class WetFixCatalog:
+    source_root: Path
+    templates: tuple[WetFixTemplate, ...]
 
 
 def detect_encoding(data: bytes) -> str:
@@ -1273,6 +1512,511 @@ def collect_sections(lines: list[str]) -> list[IniSection]:
         end = headers[section_index + 1][0] if section_index + 1 < len(headers) else len(lines)
         sections.append(IniSection(name=name, start=start, end=end, lines=lines[start:end]))
     return sections
+
+
+def collect_hash_index_pairs(content: str) -> set[tuple[str, int]]:
+    pairs: set[tuple[str, int]] = set()
+    for section in collect_sections(content.splitlines(keepends=True)):
+        hashes: list[str] = []
+        index_counts: list[int] = []
+        for raw_line in section.lines:
+            line = raw_line.rstrip("\r\n")
+            hash_match = _HASH_RE.match(line)
+            if hash_match:
+                hashes.append(hash_match.group(1).lower())
+                continue
+            index_match = _MIC_VALUE_RE.match(line)
+            if index_match:
+                index_counts.append(int(index_match.group(1)))
+        for hash_value in hashes:
+            for index_count in index_counts:
+                pairs.add((hash_value, index_count))
+    return pairs
+
+
+def section_has_wet_or_rainmap_binding(section: IniSection) -> bool:
+    return any(_WET_RAINMAP_BIND_RE.match(raw_line.rstrip("\r\n")) for raw_line in section.lines)
+
+
+def content_has_wet_or_rainmap_binding(content: str) -> bool:
+    return any(section_has_wet_or_rainmap_binding(section) for section in collect_sections(content.splitlines(keepends=True)))
+
+
+def set_wet_sections_match_priority(content: str, priority: int) -> tuple[str, int, int]:
+    lines = content.splitlines(keepends=True)
+    sections = collect_sections(lines)
+    changed_lines = list(lines)
+    changed_count = 0
+    touched_sections = 0
+
+    for section in reversed(sections):
+        if not section_has_wet_or_rainmap_binding(section):
+            continue
+        touched_sections += 1
+        priority_line_index: int | None = None
+        insert_after_index = section.start
+        for index in range(section.start + 1, section.end):
+            body = changed_lines[index].rstrip("\r\n")
+            if _MATCH_PRIORITY_RE.match(body):
+                priority_line_index = index
+                break
+            if _MIC_RE.match(body) or _HASH_RE.match(body):
+                insert_after_index = index
+
+        if priority_line_index is not None:
+            raw_line = changed_lines[priority_line_index]
+            body = raw_line.rstrip("\r\n")
+            ending = raw_line[len(body):]
+            match = _MATCH_PRIORITY_RE.match(body)
+            if match and match.group("value") != str(priority):
+                changed_lines[priority_line_index] = (
+                    f"{match.group('prefix')}{priority}{match.group('suffix')}{ending}"
+                )
+                changed_count += 1
+            continue
+
+        newline = detect_newline(content)
+        changed_lines.insert(insert_after_index + 1, f"match_priority = {priority}{newline}")
+        changed_count += 1
+
+    if not changed_count:
+        return content, 0, touched_sections
+    return "".join(changed_lines), changed_count, touched_sections
+
+
+def apply_existing_wet_priority_stage(content: str) -> tuple[str, StageResult]:
+    new_content, changed_count, touched_sections = set_wet_sections_match_priority(content, 1)
+    details: list[str] = []
+    if touched_sections:
+        details.append(f"existing WetMap/Rainmap sections: {touched_sections}")
+    if changed_count:
+        details.append(f"set match_priority = 1 in {changed_count} section(s)")
+    return new_content, StageResult("wet_fix_existing_priority", new_content != content, details)
+
+
+def wet_fix_source_looks_valid(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    try:
+        children = list(path.iterdir())
+    except OSError:
+        return False
+    for child in children:
+        if not child.is_dir() or not child.name.startswith(WET_FIX_TEMPLATE_PREFIX):
+            continue
+        try:
+            if any(grandchild.is_file() and grandchild.suffix.lower() == ".dds" for grandchild in child.iterdir()):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def candidate_wet_fix_source_roots(root: Path) -> list[Path]:
+    candidates: list[Path] = []
+    env_path = Path(os.environ[WET_FIX_ENV_VAR]).expanduser() if os.environ.get(WET_FIX_ENV_VAR) else None
+    if env_path is not None:
+        candidates.append(env_path)
+
+    runtime_base = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
+    bundle_base = Path(sys._MEIPASS) if getattr(sys, "_MEIPASS", None) else None
+    scan_bases: list[Path] = []
+    for base in (bundle_base, root if root.is_dir() else root.parent, runtime_base):
+        if base is None:
+            continue
+        scan_bases.extend([base, *base.parents])
+
+    seen: set[str] = set()
+    for base in scan_bases:
+        for candidate in (
+            base.joinpath(*WET_FIX_SOURCE_DIR_PARTS),
+            base / WET_FIX_SOURCE_DIR_PARTS[-1],
+            base,
+        ):
+            identity = path_identity(candidate)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            candidates.append(candidate)
+    return candidates
+
+
+def resolve_wet_fix_source_root(root: Path) -> Path | None:
+    for candidate in candidate_wet_fix_source_roots(root):
+        if wet_fix_source_looks_valid(candidate):
+            return candidate
+    return None
+
+
+def resolve_wet_fix_asset_source(template_dir: Path, filename: str) -> Path | None:
+    normalized = filename.strip().replace("\\", "/")
+    rel = Path(normalized)
+    direct = template_dir / rel
+    if direct.is_file():
+        return direct
+
+    basename = Path(normalized).name
+    by_name = template_dir / basename
+    if by_name.is_file():
+        return by_name
+
+    return None
+
+
+def render_builtin_wet_fix_ini_text(template: dict[str, object]) -> str:
+    lines: list[str] = []
+    for section_name, hash_value, index_count, resource_name in template.get("overrides", ()):
+        lines.append(f"[{section_name}]")
+        lines.append(f"hash = {hash_value}")
+        if index_count is not None:
+            lines.append(f"match_index_count = {index_count}")
+        lines.append("match_priority = 0")
+        lines.append(f"{WET_FIX_NEW_RESOURCE_PATH} = ref {resource_name}")
+        lines.append(f"run = {WET_FIX_NEW_RUN_COMMAND}")
+        lines.append("")
+
+    for resource_name, filename in template.get("resources", ()):
+        lines.append(f"[{resource_name}]")
+        lines.append(f"filename = {filename}")
+        lines.append("")
+
+    lines.append("[Constants]")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_builtin_wet_fix_templates(source_root: Path) -> tuple[WetFixTemplate, ...]:
+    templates: list[WetFixTemplate] = []
+    for template_data in BUILTIN_WET_FIX_TEMPLATES:
+        name = str(template_data.get("name") or "").strip()
+        if not name:
+            continue
+
+        overrides = tuple(template_data.get("overrides", ()))
+        pairs = frozenset(
+            (str(hash_value).lower(), int(index_count))
+            for _section_name, hash_value, index_count, _resource_name in overrides
+            if index_count is not None
+        )
+        if not pairs:
+            continue
+
+        template_dir = source_root / f"{WET_FIX_TEMPLATE_PREFIX}{name}"
+        assets: list[WetFixAsset] = []
+        missing_asset = False
+        for _resource_name, filename in template_data.get("resources", ()):
+            asset = resolve_wet_fix_asset_source(template_dir, str(filename))
+            if asset is None:
+                missing_asset = True
+                break
+            assets.append(WetFixAsset(filename=str(filename), source_path=asset))
+        if missing_asset or not assets:
+            continue
+
+        templates.append(
+            WetFixTemplate(
+                name=name,
+                source_dir=template_dir,
+                ini_path=template_dir / f"{WET_FIX_INI_PREFIX}{name}.ini",
+                ini_text=render_builtin_wet_fix_ini_text(template_data),
+                encoding="utf-8",
+                pairs=pairs,
+                assets=tuple(assets),
+            )
+        )
+    return tuple(templates)
+
+
+def load_wet_fix_catalog(root: Path) -> WetFixCatalog | None:
+    source_root = resolve_wet_fix_source_root(root)
+    if source_root is None:
+        return None
+
+    builtin_templates = build_builtin_wet_fix_templates(source_root)
+    if builtin_templates:
+        return WetFixCatalog(source_root=source_root, templates=builtin_templates)
+    return None
+
+
+def is_wet_fix_ini(path: Path) -> bool:
+    return path.name.casefold().endswith(WET_FIX_OUTPUT_SUFFIX.casefold())
+
+
+def relative_windows_path(root: Path, path: Path) -> str:
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        rel = path
+    return str(rel).replace("/", "\\")
+
+
+def normalize_wet_fix_line_body(body: str) -> str:
+    resource_match = _WET_FIX_RESOURCE_BIND_RE.match(body)
+    if resource_match:
+        return f"{resource_match.group('prefix')}{WET_FIX_NEW_RESOURCE_PATH}{resource_match.group('suffix')}"
+
+    run_match = _WET_FIX_RUN_RE.match(body)
+    if run_match:
+        return f"{run_match.group('prefix')}{WET_FIX_NEW_RUN_COMMAND}{run_match.group('suffix')}"
+
+    return body
+
+
+def ensure_wet_fix_settextures_runs(content: str) -> str:
+    lines = content.splitlines(keepends=True)
+    changed_lines = list(lines)
+    newline = detect_newline(content)
+
+    for section in reversed(collect_sections(lines)):
+        has_wet_binding = False
+        has_settextures_run = False
+        insert_after_index: int | None = None
+        insert_indent = ""
+
+        for index in range(section.start + 1, section.end):
+            body = changed_lines[index].rstrip("\r\n")
+            if _WET_RAINMAP_BIND_RE.match(body):
+                has_wet_binding = True
+                insert_after_index = index
+                indent_match = re.match(r"^(\s*)", body)
+                insert_indent = indent_match.group(1) if indent_match else ""
+            if _WET_FIX_RUN_RE.match(body):
+                has_settextures_run = True
+
+        if has_wet_binding and not has_settextures_run and insert_after_index is not None:
+            if not changed_lines[insert_after_index].endswith(("\r", "\n")):
+                changed_lines[insert_after_index] += newline
+            changed_lines.insert(insert_after_index + 1, f"{insert_indent}run = {WET_FIX_NEW_RUN_COMMAND}{newline}")
+
+    if len(changed_lines) == len(lines):
+        return content
+    return "".join(changed_lines)
+
+
+def rewrite_wet_fix_ini_text(template_text: str, filename_relpaths: dict[str, str]) -> tuple[str, int]:
+    rewritten: list[str] = []
+    replacements = 0
+    for raw_line in template_text.splitlines(keepends=True):
+        body = raw_line.rstrip("\r\n")
+        ending = raw_line[len(body):]
+        body = normalize_wet_fix_line_body(body)
+        match = _FILENAME_VALUE_RE.match(body)
+        if match and match.group("value").strip().replace("\\", "/").casefold().endswith(".dds"):
+            key = match.group("value").strip().replace("\\", "/").casefold()
+            replacement = filename_relpaths.get(key)
+            if replacement is not None:
+                rewritten.append(f"{match.group('prefix')}{replacement}{match.group('suffix')}{ending}")
+                replacements += 1
+            else:
+                rewritten.append(f"{body}{ending}")
+        else:
+            rewritten.append(f"{body}{ending}")
+    return ensure_wet_fix_settextures_runs("".join(rewritten)), replacements
+
+
+def directory_has_direct_dds_files(path: Path) -> bool:
+    try:
+        return any(child.is_file() and child.suffix.casefold() == ".dds" for child in path.iterdir())
+    except OSError:
+        return False
+
+
+def find_wet_fix_texture_dir(mod_dir: Path) -> Path | None:
+    candidates: list[Path] = []
+    if directory_has_direct_dds_files(mod_dir):
+        candidates.append(mod_dir)
+
+    try:
+        subdirs = [path for path in mod_dir.rglob("*") if path.is_dir()]
+    except OSError:
+        subdirs = []
+
+    for subdir in subdirs:
+        try:
+            rel = subdir.relative_to(mod_dir)
+        except ValueError:
+            continue
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        if directory_has_direct_dds_files(subdir):
+            candidates.append(subdir)
+
+    if candidates:
+        return sorted(
+            candidates,
+            key=lambda path: (
+                0 if path.name.casefold() == WET_FIX_DEFAULT_TEXTURE_DIR.casefold() else 1,
+                len(path.relative_to(mod_dir).parts) if path != mod_dir else 0,
+                str(path).casefold(),
+            ),
+        )[0]
+
+    return None
+
+
+def make_text_file_plan(
+    root: Path,
+    path: Path,
+    new_text: str,
+    encoding: str,
+    stage: StageResult,
+) -> FilePlan | None:
+    existed_before = path.exists()
+    original_text = ""
+    if existed_before:
+        original_text, encoding = load_text(path)
+    plan = FilePlan(
+        path=path,
+        relpath=manifest_relpath(root, path),
+        original_text=original_text,
+        new_text=new_text,
+        encoding=encoding,
+        stages=[stage],
+        existed_before=existed_before,
+    )
+    return plan if plan.changed else None
+
+
+def make_binary_file_plan(
+    root: Path,
+    path: Path,
+    new_bytes: bytes,
+    stage: StageResult,
+) -> FilePlan | None:
+    existed_before = path.exists()
+    original_bytes = path.read_bytes() if existed_before else b""
+    plan = FilePlan(
+        path=path,
+        relpath=manifest_relpath(root, path),
+        original_text="",
+        new_text="",
+        encoding="binary",
+        stages=[stage],
+        existed_before=existed_before,
+        original_bytes=original_bytes,
+        new_bytes=new_bytes,
+    )
+    return plan if plan.changed else None
+
+
+def build_wet_fix_plans(
+    root: Path,
+    ini_texts: dict[Path, str],
+    dry_run: bool,
+    catalog: WetFixCatalog | None = None,
+) -> list[FilePlan]:
+    if catalog is None:
+        catalog = load_wet_fix_catalog(root)
+    if catalog is None:
+        print("[WARN] wet_fix: source folder or wet fix DDS files not found; wet fix skipped.")
+        return []
+
+    pairs_by_mod_dir: dict[Path, set[tuple[str, int]]] = {}
+    existing_wet_mod_dirs: set[Path] = set()
+    for ini_path, content in ini_texts.items():
+        if is_path_within(ini_path, catalog.source_root):
+            continue
+        if is_wet_fix_ini(ini_path):
+            continue
+        if content_has_wet_or_rainmap_binding(content):
+            existing_wet_mod_dirs.add(ini_path.parent)
+        pairs = collect_hash_index_pairs(content)
+        if pairs:
+            pairs_by_mod_dir.setdefault(ini_path.parent, set()).update(pairs)
+
+    if not pairs_by_mod_dir:
+        return []
+
+    plans: list[FilePlan] = []
+    planned_identities: set[str] = set()
+    status = "DRY-RUN" if dry_run else "PENDING"
+
+    for mod_dir, mod_pairs in sorted(pairs_by_mod_dir.items(), key=lambda item: str(item[0]).casefold()):
+        for template in catalog.templates:
+            matched_pairs = sorted(mod_pairs.intersection(template.pairs))
+            if not matched_pairs:
+                continue
+
+            output_ini = mod_dir / f"{template.name}{WET_FIX_OUTPUT_SUFFIX}"
+            texture_dir = find_wet_fix_texture_dir(mod_dir)
+            if texture_dir is None:
+                print(f"[WARN] wet_fix: skipped {display_relpath(root, mod_dir)}; no folder containing .dds files was found.")
+                continue
+
+            asset_targets: list[tuple[WetFixAsset, Path, str, bytes]] = []
+            filename_relpaths: dict[str, str] = {}
+            missing_asset = False
+            for asset in template.assets:
+                try:
+                    asset_bytes = asset.source_path.read_bytes()
+                except OSError as exc:
+                    print(f"[WARN] wet_fix: skipped {display_relpath(root, mod_dir)}; failed to read {asset.source_path}: {exc}")
+                    missing_asset = True
+                    break
+                target_name = Path(asset.filename.strip().replace("\\", "/")).name
+                output_dds = texture_dir / target_name
+                output_relpath = relative_windows_path(mod_dir, output_dds)
+                asset_targets.append((asset, output_dds, output_relpath, asset_bytes))
+                filename_relpaths[asset.filename.strip().replace("\\", "/").casefold()] = output_relpath
+            if missing_asset:
+                continue
+
+            new_ini_text, filename_replacements = rewrite_wet_fix_ini_text(template.ini_text, filename_relpaths)
+            generated_priority_changes = 0
+            if mod_dir in existing_wet_mod_dirs:
+                new_ini_text, generated_priority_changes, _touched_sections = set_wet_sections_match_priority(new_ini_text, 0)
+            pair_preview = ", ".join(f"{hash_value}/{index_count}" for hash_value, index_count in matched_pairs[:3])
+            if len(matched_pairs) > 3:
+                pair_preview += f", +{len(matched_pairs) - 3}"
+            asset_preview = ", ".join(Path(asset.filename.strip().replace("\\", "/")).name for asset in template.assets[:4])
+            if len(template.assets) > 4:
+                asset_preview += f", +{len(template.assets) - 4}"
+
+            ini_stage = StageResult(
+                WET_FIX_STAGE_NAME,
+                True,
+                [
+                    f"{template.name}: matched {pair_preview}",
+                    f"wet map assets: {asset_preview}",
+                    f"filename rewrites: {filename_replacements}",
+                ],
+            )
+            if mod_dir in existing_wet_mod_dirs:
+                ini_stage.details.append(f"new WetFix match_priority = 0 ({generated_priority_changes} line(s))")
+            try:
+                ini_plan = make_text_file_plan(root, output_ini, new_ini_text, template.encoding, ini_stage)
+            except (OSError, UnicodeError) as exc:
+                print(f"[WARN] wet_fix: skipped {display_relpath(root, output_ini)}: {exc}")
+                continue
+
+            if ini_plan is not None and path_identity(ini_plan.path) not in planned_identities:
+                plans.append(ini_plan)
+                planned_identities.add(path_identity(ini_plan.path))
+                print(f"[{status}] {ini_plan.relpath}")
+                print(f"  - {WET_FIX_STAGE_NAME}: {'; '.join(ini_stage.details)}")
+
+            for asset, output_dds, output_relpath, asset_bytes in asset_targets:
+                target_name = Path(asset.filename.strip().replace("\\", "/")).name
+                dds_stage = StageResult(
+                    WET_FIX_ASSET_STAGE_NAME,
+                    True,
+                    [f"copy {target_name} from {display_relpath(catalog.source_root, asset.source_path)}"],
+                )
+                dds_identity = path_identity(output_dds)
+                if dds_identity in planned_identities:
+                    continue
+                try:
+                    dds_plan = make_binary_file_plan(root, output_dds, asset_bytes, dds_stage)
+                except OSError as exc:
+                    print(f"[WARN] wet_fix: skipped {display_relpath(root, output_dds)}: {exc}")
+                    continue
+                if dds_plan is not None:
+                    plans.append(dds_plan)
+                    planned_identities.add(dds_identity)
+                    print(f"[{status}] {dds_plan.relpath}")
+                    print(f"  - {WET_FIX_ASSET_STAGE_NAME}: {'; '.join(dds_stage.details)}")
+
+    return plans
 
 
 def extract_filter_index(section: IniSection) -> int | None:
@@ -1963,6 +2707,8 @@ def iter_ini_files(root: Path, include_disabled: bool) -> list[Path]:
         rel = path.relative_to(root)
         if is_hidden_path(rel):
             continue
+        if is_wet_fix_ini(path):
+            continue
         if OLD_BACKUP_NAME_RE.search(path.name):
             continue
         if is_disabled_ini(path) and not include_disabled:
@@ -2127,6 +2873,121 @@ def list_backup_sessions(root: Path) -> list[Path]:
     return sorted(sessions, key=lambda p: p.name)
 
 
+def is_path_within(path: Path, root: Path) -> bool:
+    try:
+        return path.resolve().is_relative_to(root.resolve())
+    except OSError:
+        return False
+
+
+def iter_manifest_backup_paths(root: Path, session: Path, manifest: dict[str, Any]) -> list[Path]:
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for entry in manifest.get("files", []):
+        for key in ("backup_rel", "before_rel", "after_rel"):
+            rel = entry.get(key)
+            if not rel:
+                continue
+            candidate = root / rel
+            identity = path_identity(candidate)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            paths.append(candidate)
+    return paths
+
+
+def iter_session_named_backup_paths(root: Path, session: Path) -> list[Path]:
+    token = f".backup.{session.name}"
+    paths: list[Path] = []
+    try:
+        candidates = root.rglob(f"*{token}*")
+    except OSError:
+        return paths
+    for candidate in candidates:
+        if candidate.is_file() and token in candidate.name:
+            paths.append(candidate)
+    return paths
+
+
+def delete_backup_session(root: Path, session: Path) -> tuple[int, int]:
+    backup_root = root / BACKUP_DIR_NAME
+    if not is_path_within(session, backup_root):
+        return 0, 0
+
+    deleted_files = 0
+    backup_paths: list[Path] = []
+    manifest_path = session / BACKUP_MANIFEST
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        backup_paths.extend(iter_manifest_backup_paths(root, session, manifest))
+    except Exception:
+        pass
+
+    backup_paths.extend(iter_session_named_backup_paths(root, session))
+    seen: set[str] = set()
+    for backup_path in backup_paths:
+        identity = path_identity(backup_path)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if ".backup." not in backup_path.name:
+            continue
+        if not is_path_within(backup_path, root):
+            continue
+        try:
+            if backup_path.is_file():
+                backup_path.unlink()
+                deleted_files += 1
+        except OSError:
+            continue
+
+    deleted_sessions = 0
+    try:
+        shutil.rmtree(session)
+        deleted_sessions = 1
+    except OSError:
+        pass
+
+    try:
+        if backup_root.exists() and not any(backup_root.iterdir()):
+            backup_root.rmdir()
+    except OSError:
+        pass
+
+    return deleted_sessions, deleted_files
+
+
+def delete_backup_sessions(root: Path) -> tuple[int, int]:
+    sessions = list_backup_sessions(root)
+    if not sessions:
+        return 0, 0
+
+    deleted_sessions = 0
+    deleted_files = 0
+    for session in sessions:
+        session_count, file_count = delete_backup_session(root, session)
+        deleted_sessions += session_count
+        deleted_files += file_count
+    return deleted_sessions, deleted_files
+
+
+def prune_backup_sessions(root: Path, keep_latest: int = DEFAULT_BACKUP_RETENTION_LIMIT) -> tuple[int, int]:
+    keep_latest = max(1, int(keep_latest))
+    sessions = list_backup_sessions(root)
+    excess_count = len(sessions) - keep_latest
+    if excess_count <= 0:
+        return 0, 0
+
+    deleted_sessions = 0
+    deleted_files = 0
+    for session in sessions[:excess_count]:
+        session_count, file_count = delete_backup_session(root, session)
+        deleted_sessions += session_count
+        deleted_files += file_count
+    return deleted_sessions, deleted_files
+
+
 def resolve_manifest_source(root: Path, session: Path, entry: dict[str, Any], *keys: str) -> Path:
     for key in keys:
         rel = entry.get(key)
@@ -2162,22 +3023,27 @@ def make_backup_session(root: Path, plans: list[FilePlan]) -> Path:
 
     manifest_files: list[dict[str, Any]] = []
     for plan in plans:
-        backup_path = sidecar_backup_path(plan.path, session.name)
-        backup_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(plan.path, backup_path)
-        backup_rel = manifest_relpath(root, backup_path)
-        manifest_files.append({
+        manifest_entry: dict[str, Any] = {
             "path": plan.relpath,
-            "backup_rel": backup_rel,
-            "before_rel": backup_rel,
-            "backup_name": backup_path.name,
-            "before_name": backup_path.name,
             "encoding": plan.encoding,
+            "existed_before": plan.existed_before,
             "stages": [
                 {"name": stage.name, "details": stage.details, "hits": len(stage.hits)}
                 for stage in plan.stages if stage.changed
             ],
-        })
+        }
+        if plan.existed_before:
+            backup_path = sidecar_backup_path(plan.path, session.name)
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(plan.path, backup_path)
+            backup_rel = manifest_relpath(root, backup_path)
+            manifest_entry.update({
+                "backup_rel": backup_rel,
+                "before_rel": backup_rel,
+                "backup_name": backup_path.name,
+                "before_name": backup_path.name,
+            })
+        manifest_files.append(manifest_entry)
 
     manifest = {
         "schema": 2,
@@ -2195,16 +3061,27 @@ def write_plans(plans: list[FilePlan], backup_session: Path) -> None:
     written: list[FilePlan] = []
     try:
         for plan in plans:
-            plan.path.write_bytes(plan.new_text.encode(plan.encoding))
+            plan.path.parent.mkdir(parents=True, exist_ok=True)
+            if plan.new_bytes is not None:
+                plan.path.write_bytes(plan.new_bytes)
+            else:
+                plan.path.write_bytes(plan.new_text.encode(plan.encoding))
             written.append(plan)
     except Exception:
         manifest = json.loads((backup_session / BACKUP_MANIFEST).read_text(encoding="utf-8"))
         root = Path(manifest["root"])
+        entries = {entry["path"]: entry for entry in manifest.get("files", [])}
         backup_map = {
             entry["path"]: resolve_manifest_backup_source(root, backup_session, entry)
             for entry in manifest.get("files", [])
+            if entry.get("backup_rel") or entry.get("before_rel")
         }
-        for written_plan in written:
+        for written_plan in reversed(written):
+            entry = entries.get(written_plan.relpath, {})
+            if entry.get("existed_before") is False and not (entry.get("backup_rel") or entry.get("before_rel")):
+                with contextlib.suppress(FileNotFoundError):
+                    written_plan.path.unlink()
+                continue
             backup_path = backup_map.get(written_plan.relpath)
             if backup_path is not None and backup_path.exists():
                 shutil.copy2(backup_path, written_plan.path)
@@ -2309,14 +3186,22 @@ def files_differ(dest: Path, src: Path) -> bool:
         return True
 
 
-def rollback(root: Path, backup_id: str, restore_before: bool = False) -> int:
+def rollback(
+    root: Path,
+    backup_id: str,
+    restore_before: bool = False,
+    backup_limit: int = DEFAULT_BACKUP_RETENTION_LIMIT,
+) -> int:
     session = find_backup_session(root, backup_id)
     manifest = json.loads((session / BACKUP_MANIFEST).read_text(encoding="utf-8"))
-    restore_items: list[tuple[dict[str, Any], Path, Path, str]] = []
+    restore_items: list[tuple[dict[str, Any], Path, Path | None, str]] = []
     fallback_to_before = 0
 
     for entry in manifest.get("files", []):
         dest = root / entry["path"]
+        if restore_before and entry.get("existed_before") is False and not (entry.get("before_rel") or entry.get("backup_rel")):
+            restore_items.append((entry, dest, None, "absent"))
+            continue
         src, state = resolve_manifest_restore_source(root, session, entry, restore_before)
         if not src.exists():
             print(f"[SKIP] Missing backup file: {src}")
@@ -2329,8 +3214,13 @@ def rollback(root: Path, backup_id: str, restore_before: bool = False) -> int:
         print(f"No restorable files found in backup session: {session.name}")
         return 1
 
+    def restore_item_differs(dest: Path, src: Path | None) -> bool:
+        if src is None:
+            return dest.exists()
+        return files_differ(dest, src)
+
     snapshot_session: Path | None = None
-    if any(files_differ(dest, src) for _, dest, src, _ in restore_items):
+    if any(restore_item_differs(dest, src) for _, dest, src, _ in restore_items):
         snapshot_session = make_current_snapshot_session(
             root,
             [entry for entry, _, _, _ in restore_items],
@@ -2339,6 +3229,12 @@ def rollback(root: Path, backup_id: str, restore_before: bool = False) -> int:
 
     restored = 0
     for entry, dest, src, state in restore_items:
+        if src is None:
+            with contextlib.suppress(FileNotFoundError):
+                dest.unlink()
+            restored += 1
+            print(f"[REMOVED-BEFORE] {entry['path']}")
+            continue
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dest)
         restored += 1
@@ -2348,6 +3244,9 @@ def rollback(root: Path, backup_id: str, restore_before: bool = False) -> int:
         print(f"[WARN] {fallback_to_before} file(s) had no after snapshot; restored their before snapshot instead.")
     if snapshot_session is not None:
         print(f"Current state snapshot: {snapshot_session.name}")
+        pruned_sessions, pruned_files = prune_backup_sessions(root, backup_limit)
+        if pruned_sessions:
+            print(f"Pruned old backup sessions: {pruned_sessions} session(s), {pruned_files} file(s); limit={backup_limit}")
     mode = "before" if restore_before else "after"
     print(f"\nRollback complete from {session.name} ({mode} state): restored {restored} file(s).")
     return 0
@@ -2388,10 +3287,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-disabled", action="store_true", help="Also process DISABLED*.ini files.")
     parser.add_argument("--force-new-version", action="store_true", help="Run fixes even when an ini looks like a newer-version mod.")
     parser.add_argument("--fixmenu", "--enable-fixmenu", dest="enable_fixmenu", action="store_true", help="Enable optional fixmenu2.0 ps-t102 -> ps-t100 replacement stage.")
+    parser.add_argument("--wet-fix", "--enable-wet-fix", dest="enable_wet_fix", action="store_true", help="Enable optional wetness effect fix from bundled wet fix DDS assets.")
     parser.add_argument("--list-backups", action="store_true", help="List available backup sessions and exit.")
     parser.add_argument("--rollback", nargs="?", const="latest", metavar="ID", help="Restore to the after-state of backup ID/number, or latest if ID is omitted.")
     parser.add_argument("--restore", dest="rollback", nargs="?", const="latest", metavar="ID", help="Alias for --rollback.")
     parser.add_argument("--rollback-before", action="store_true", help="Restore the before-state of the selected backup instead of its after-state.")
+    parser.add_argument("--backup-limit", type=int, default=DEFAULT_BACKUP_RETENTION_LIMIT, help="Keep only the latest N backup sessions after creating a new backup. Defaults to 15.")
     return parser
 
 
@@ -2430,15 +3331,18 @@ def build_fix_plan(options: RunOptions, mapping: HashMapping, pattern: re.Patter
     hotfix_root = resolve_mods_root(root)
     hotfix_files = iter_hotfix_cleanup_files(hotfix_root)
     hotfix_file_keys = {path_identity(path) for path in hotfix_files}
+    wet_fix_catalog = load_wet_fix_catalog(root) if options.enable_wet_fix else None
     unified_backup_identities = collect_unified_backup_identities(root)
     ini_files = [
         path
         for path in iter_ini_files(root, include_disabled=options.include_disabled)
         if path_identity(path) not in hotfix_file_keys
+        and not (wet_fix_catalog is not None and is_path_within(path, wet_fix_catalog.source_root))
     ]
     print(f"Scanning {len(ini_files)} .ini file(s) under: {root}")
 
     file_plans: list[FilePlan] = []
+    ini_texts_for_wet_fix: dict[Path, str] = {}
     skipped_new_version = 0
     for path in ini_files:
         relpath = str(path.relative_to(root)).replace("\\", "/")
@@ -2453,9 +3357,15 @@ def build_fix_plan(options: RunOptions, mapping: HashMapping, pattern: re.Patter
                 enable_fixmenu=options.enable_fixmenu,
                 legacy_sources=legacy_sources,
             )
+            if options.enable_wet_fix:
+                new_text, wet_priority_stage = apply_existing_wet_priority_stage(new_text)
+                if wet_priority_stage.changed:
+                    stages.append(wet_priority_stage)
         except Exception as exc:
             print(f"[ERROR] {relpath}: {exc}")
             continue
+
+        ini_texts_for_wet_fix[path] = new_text
 
         if stages and stages[0].name == "new_version_guard" and not any(stage.changed for stage in stages):
             skipped_new_version += 1
@@ -2476,6 +3386,9 @@ def build_fix_plan(options: RunOptions, mapping: HashMapping, pattern: re.Patter
             for stage in visible_stages:
                 print(f"  - {stage.name}: {'; '.join(stage.details) if stage.details else 'changed'}")
 
+    if options.enable_wet_fix:
+        file_plans.extend(build_wet_fix_plans(root, ini_texts_for_wet_fix, options.dry_run, wet_fix_catalog))
+
     for path in hotfix_files:
         relpath = display_relpath(hotfix_root, path)
         status = "DRY-RUN" if options.dry_run else "PENDING"
@@ -2488,6 +3401,7 @@ def build_fix_plan(options: RunOptions, mapping: HashMapping, pattern: re.Patter
         file_plans=file_plans,
         hotfix_files=hotfix_files,
         skipped_new_version=skipped_new_version,
+        backup_limit=options.backup_limit,
     )
 
 
@@ -2544,6 +3458,9 @@ def execute_fix_plan(plan: FixPlan) -> int:
     if backup_session is not None:
         print(f"备份会话：{backup_session.name}")
         command_name = runtime_command_name()
+        pruned_sessions, pruned_files = prune_backup_sessions(root, plan.backup_limit)
+        if pruned_sessions:
+            print(f"已自动清理旧备份：{pruned_sessions} 个会话，{pruned_files} 个备份文件；当前上限 {plan.backup_limit}")
         print(f"恢复到本次修复后状态：{command_name} {root} --rollback {backup_session.name}")
         print(f"撤销本次修复：{command_name} {root} --rollback {backup_session.name} --rollback-before")
     else:
@@ -2578,7 +3495,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.list_backups:
         return list_backups(root)
     if args.rollback:
-        return rollback(root, args.rollback, restore_before=args.rollback_before)
+        return rollback(root, args.rollback, restore_before=args.rollback_before, backup_limit=args.backup_limit)
 
     return run_fix(
         RunOptions(
@@ -2587,6 +3504,8 @@ def main(argv: list[str] | None = None) -> int:
             include_disabled=args.include_disabled,
             force_new_version=args.force_new_version,
             enable_fixmenu=args.enable_fixmenu,
+            enable_wet_fix=args.enable_wet_fix,
+            backup_limit=args.backup_limit,
         )
     )
 

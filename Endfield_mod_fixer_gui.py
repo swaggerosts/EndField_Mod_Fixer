@@ -19,6 +19,8 @@ import time
 import traceback
 import urllib.error
 import urllib.request
+import webbrowser
+from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox
 from tkinter import font as tkfont
@@ -32,8 +34,8 @@ except ImportError:
 import Endfield_mod_fixer as fixer
 import rabbitfx_ps_t_converter as stable_texture_converter
 
-APP_VERSION = "1.3.1"
-APP_TITLE = "Endfield mods fixer v1.3.1"
+APP_VERSION = "1.3.2"
+APP_TITLE = "Endfield mods fixer v1.3.2"
 APP_FONT_FAMILY = "猫啃什锦黑"
 APP_FONT_FILE = Path("MaoKenShiJinHei") / "MaoKenShiJinHei-2.ttf"
 UI_FONT_FAMILY = APP_FONT_FAMILY
@@ -46,13 +48,15 @@ UI_TITLE_FONT_SIZE = 16
 UI_SECTION_FONT_SIZE = 14
 UI_BODY_FONT_SIZE = 14
 UI_SMALL_FONT_SIZE = 13
-MIN_WINDOW_WIDTH = 1260
-DEFAULT_WINDOW_WIDTH = 1324
+MIN_WINDOW_WIDTH = 1320
+DEFAULT_WINDOW_WIDTH = 1400
 MIN_COLLAPSED_WINDOW_HEIGHT = 620
 COLLAPSED_BOTTOM_PADDING = 8
 EXPANDED_WINDOW_HEIGHT = 770
 DEFAULT_LOG_AREA_HEIGHT = 220
 LOG_AREA_TOP_GAP = 8
+TASK_CARD_HEIGHT = 143
+TASK_CARD_GAP = 10
 LANGUAGE_FADE_FRAMES = 9
 LANGUAGE_FADE_INTERVAL_MS = 16
 LANGUAGE_FADE_PANEL_TARGET = 0.92
@@ -81,7 +85,13 @@ def app_base_dir() -> Path:
 
 APP_DIR = app_base_dir()
 UPDATE_DIR = APP_DIR / "updates"
+USER_SETTINGS_NAME = "Endfield_mod_fixer_settings.json"
+DEFAULT_BACKUP_RETENTION_LIMIT = fixer.DEFAULT_BACKUP_RETENTION_LIMIT
+MIN_BACKUP_RETENTION_LIMIT = 1
+MAX_BACKUP_RETENTION_LIMIT = 99
+DEFAULT_STABLE_MERGE_SAME_RESOURCES = True
 APP_ICON_NAME = "favicon.ico"
+SECONDARY_UPDATE_REPO_URL = f"https://github.com/{SECONDARY_UPDATE_REPO}"
 STRIP_CYAN = "#00ffff"
 STRIP_MAGENTA = "#ff00ff"
 STRIP_YELLOW = "#ffff00"
@@ -91,10 +101,16 @@ ROLLBACK_YELLOW = "#ebeb0a"
 ROLLBACK_BUTTON_TEXT = "#3F3F3D"
 LOG_SWITCH_ON_YELLOW = "#e1e100"
 LOG_SWITCH_KNOB_ON = "#252b30"
+SETTINGS_WINDOW_WIDTH = 560
+SETTINGS_WINDOW_FALLBACK_HEIGHT = 478
+SETTINGS_AUTHOR_PANEL_GAP = 8
+SETTINGS_AUTHOR_BOTTOM_PADDING = 8
+DISABLED_MOD_PREFIX = "DISABLED_"
 ROLLBACK_WINDOW_BASE_WIDTH = 760
 ROLLBACK_WINDOW_BASE_HEIGHT = 430
 FR_PRIVATE = 0x10
 LOADED_FONT_PATHS: set[Path] = set()
+STABLE_TEXTURE_OFFSETS = (-2, -1, 0, 1, 2)
 
 
 def configure_process_dpi_awareness() -> None:
@@ -130,6 +146,59 @@ def app_resource_path(name: str | Path) -> Path:
         return cwd_local
 
     return app_local
+
+
+def app_settings_path() -> Path:
+    return APP_DIR / USER_SETTINGS_NAME
+
+
+def default_user_settings() -> dict[str, object]:
+    return {
+        "backup_retention_limit": DEFAULT_BACKUP_RETENTION_LIMIT,
+        "stable_merge_same_resources": DEFAULT_STABLE_MERGE_SAME_RESOURCES,
+    }
+
+
+def normalized_user_settings(settings: dict[str, object]) -> dict[str, object]:
+    return {
+        "backup_retention_limit": clamp_backup_retention_limit(settings.get("backup_retention_limit")),
+        "stable_merge_same_resources": bool(
+            settings.get("stable_merge_same_resources", DEFAULT_STABLE_MERGE_SAME_RESOURCES)
+        ),
+    }
+
+
+def clamp_backup_retention_limit(value: object) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = DEFAULT_BACKUP_RETENTION_LIMIT
+    return max(MIN_BACKUP_RETENTION_LIMIT, min(MAX_BACKUP_RETENTION_LIMIT, number))
+
+
+def load_user_settings() -> dict[str, object]:
+    settings = default_user_settings()
+    path = app_settings_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return settings
+    if isinstance(data, dict):
+        settings["backup_retention_limit"] = clamp_backup_retention_limit(data.get("backup_retention_limit"))
+        settings["stable_merge_same_resources"] = bool(
+            data.get("stable_merge_same_resources", DEFAULT_STABLE_MERGE_SAME_RESOURCES)
+        )
+    return settings
+
+
+def save_user_settings(settings: dict[str, object]) -> None:
+    payload = normalized_user_settings(settings)
+    path = app_settings_path()
+    if payload == default_user_settings():
+        with contextlib.suppress(FileNotFoundError):
+            path.unlink()
+        return
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def set_window_icon(window: tk.Toplevel) -> None:
@@ -246,6 +315,13 @@ THEMES = {
         "switch_track": "#ffffff",
         "switch_knob": "#f5c84b",
         "switch_text": "#2b3038",
+        "accent": "#6272f4",
+        "accent_dim": "#9aa5ff",
+        "card": "#ffffff",
+        "card_2": "#e8ebf2",
+        "card_text": "#2b3038",
+        "card_muted": "#6f7785",
+        "warning": "#b58500",
     },
 }
 
@@ -446,6 +522,99 @@ UI_COPY = {
         "confirm_rollback_msg": "Restore {session_id} to the {mode}? The current state will be backed up first.",
     },
 }
+
+UI_COPY["zh"].update({
+    "stable_offset_tooltip_title": "\u79fb\u69fd\u8bbe\u7f6e",
+    "stable_offset_tooltip": (
+        "\u63a7\u5236\u7a33\u5b9a\u7eb9\u7406\u8f6c\u6362\u65f6\u7684 ps-t \u69fd\u4f4d\u504f\u79fb\u3002\n"
+        "0\uff1a\u76f4\u63a5\u67e5\u627e DiffuseMap/LightMap/NormalMap \u5e76\u66ff\u6362\u4e3a RabbitFX \u8bed\u53e5\u3002\n"
+        "+1/+2\uff1a\u5148\u6309 ps-t \u6570\u5b57\u5411\u4e0a\u504f\u79fb\u540e\u518d\u8bb0\u5f55\u66ff\u6362\u3002\n"
+        "-1/-2\uff1a\u5148\u6309 ps-t \u6570\u5b57\u5411\u4e0b\u504f\u79fb\u540e\u518d\u8bb0\u5f55\u66ff\u6362\u3002"
+    ),
+    "close_while_running_title": "\u4efb\u52a1\u8fd0\u884c\u4e2d",
+    "close_while_running_msg": "\u8bf7\u7b49\u5f85\u5f53\u524d\u4efb\u52a1\u5b8c\u6210\u540e\u518d\u5173\u95ed\u4fee\u590d\u5668\u3002",
+    "settings": "\u8bbe\u7f6e",
+    "settings_window": "\u8bbe\u7f6e",
+    "backup_retention_title": "\u56de\u6eda\u5907\u4efd\u6570\u91cf",
+    "backup_retention_desc": "\u4ec5\u4fdd\u7559\u6700\u65b0\u7684 N \u4e2a\u771f\u5b9e\u5907\u4efd\uff0c\u8d85\u51fa\u540e\u81ea\u52a8\u5220\u9664\u6700\u65e7\u5907\u4efd\u3002",
+    "backup_retention_unit": "\u4e2a",
+    "stable_merge_title": "\u7a33\u5b9a\u7eb9\u7406\u540c\u7c7b\u9879",
+    "stable_merge_desc": "\u63a7\u5236\u76f8\u540c RabbitFX \u89d2\u8272/\u8d44\u6e90\u662f\u5426\u5408\u5e76\u8f93\u51fa\u3002",
+    "stable_merge_on": "\u5408\u5e76",
+    "stable_merge_off": "\u4e0d\u5408\u5e76",
+    "stable_merge_tooltip_title": "\u5408\u5e76\u540c\u7c7b\u9879",
+    "stable_merge_tooltip": (
+        "\u5408\u5e76\uff1a\u76f8\u540c\u7684 Resource\\RabbitFX\\\u89d2\u8272 = ref \u540c\u4e00\u8d44\u6e90\u53ea\u5199\u4e00\u6b21\u3002\n"
+        "\u4e0d\u5408\u5e76\uff1a\u6309\u8fd8\u539f\u51fa\u7684 ps-t \u8bb0\u5f55\u9010\u6761\u8f93\u51fa\u3002\n"
+        "\u4e24\u79cd\u6a21\u5f0f\u90fd\u4f1a\u53ea\u5728\u672b\u5c3e\u4fdd\u7559\u4e00\u6b21 run = CommandList\\RabbitFX\\SetTextures\u3002"
+    ),
+    "settings_check_update": "\u68c0\u67e5\u66f4\u65b0",
+    "rollback_tip": "\u67e5\u770b\u4e0e\u6062\u590d\u672c\u6b21\u6253\u5f00\u540e\u65b0\u589e\u7684\u5907\u4efd\n\u6240\u6709\u56de\u6eda\u8bb0\u5f55\u53ef\u5728\u8bbe\u7f6e\u4e2d\u627e\u5230",
+    "rollback_records": "\u56de\u6eda\u8bb0\u5f55",
+    "rollback_records_tooltip_title": "\u56de\u6eda\u8bb0\u5f55",
+    "rollback_records_tooltip": "\u663e\u793a\u5386\u53f2\u64cd\u4f5c\u8fc7\u7684\u6240\u6709\u5907\u4efd\u3002\u4e3b\u754c\u9762\u56de\u6eda\u7ba1\u7406\u53ea\u663e\u793a\u672c\u6b21\u6253\u5f00\u540e\u65b0\u589e\u7684\u5907\u4efd\uff1b\u6240\u6709\u56de\u6eda\u8bb0\u5f55\u53ef\u5728\u8bbe\u7f6e\u4e2d\u627e\u5230\u3002",
+    "backup_list_empty": "\u6682\u65e0\u5907\u4efd",
+    "backup_list_current_empty": "\u672c\u6b21\u6253\u5f00\u540e\u5c1a\u65e0\u65b0\u5907\u4efd",
+    "settings_saved": "\u8bbe\u7f6e\u5df2\u4fdd\u5b58",
+    "duplicate_mod_title": "\u68c0\u6d4b\u5230 Mod \u590d\u7528",
+    "duplicate_mod_message": "下列不同 Mod 文件夹的主 ini 存在相同 hash 值。请在每组中勾选要禁用的 Mod，程序会在文件夹名前加上 DISABLED_ 前缀。",
+    "duplicate_mod_hash": "重复 hash",
+    "duplicate_mod_main_ini": "\u4e3b ini",
+    "duplicate_mod_disable_selected": "\u7981\u7528\u9009\u4e2d\u5e76\u7ee7\u7eed",
+    "duplicate_mod_cancel": "\u53d6\u6d88\u4fee\u590d",
+    "duplicate_mod_selection_required": "\u6bcf\u7ec4\u590d\u7528 Mod \u5fc5\u987b\u4fdd\u7559 1 \u4e2a\uff0c\u5e76\u7981\u7528\u5176\u4f59 Mod\u3002",
+    "duplicate_mod_disable_failed": "\u7981\u7528 Mod \u5931\u8d25",
+    "duplicate_mod_disabled_log": "Mod \u590d\u7528\u68c0\u6d4b\uff1a\u5df2\u7981\u7528 {count} \u4e2a\u91cd\u590d Mod\u3002",
+    "duplicate_mod_cancel_log": "Mod \u590d\u7528\u68c0\u6d4b\uff1a\u7528\u6237\u53d6\u6d88\uff0c\u5df2\u505c\u6b62\u4fee\u590d\u3002",
+    "wet_fix": "\u6e7f\u6da6\u4fee\u590d",
+    "wet_fix_desc": "\u4fee\u590d\u4e0b\u96e8\u65f6\u96e8\u6c34\u8f68\u8ff9\u663e\u793a\u5f02\u5e38\u95ee\u9898\uff0c\u90e8\u5206mod\u53ef\u7528",
+})
+UI_COPY["en"].update({
+    "stable_offset_tooltip_title": "Move Ps-t Channel",
+    "stable_offset_tooltip": (
+        "Controls the ps-t slot offset used by Stable Texture conversion.\n"
+        "0: directly finds DiffuseMap/LightMap/NormalMap and replaces them with RabbitFX entries.\n"
+        "+1/+2: records the replacement after shifting ps-t slots upward.\n"
+        "-1/-2: records the replacement after shifting ps-t slots downward."
+    ),
+    "close_while_running_title": "Task Running",
+    "close_while_running_msg": "Please wait for the current task to finish before closing the fixer.",
+    "settings": "Settings",
+    "settings_window": "Settings",
+    "backup_retention_title": "Rollback Backup Count",
+    "backup_retention_desc": "Keep only the latest N real backup sessions; older backups are removed automatically.",
+    "backup_retention_unit": "sessions",
+    "stable_merge_title": "Stable Texture Entries",
+    "stable_merge_desc": "Controls whether identical RabbitFX role/resource entries are merged.",
+    "stable_merge_on": "Merge",
+    "stable_merge_off": "Keep",
+    "stable_merge_tooltip_title": "Stable Texture Entries",
+    "stable_merge_tooltip": (
+        "Merge: writes the same Resource\\RabbitFX\\role = ref resource entry only once.\n"
+        "Keep: writes entries one by one from the restored ps-t records.\n"
+        "Both modes keep exactly one trailing run = CommandList\\RabbitFX\\SetTextures line."
+    ),
+    "settings_check_update": "Check Update",
+    "rollback_tip": "View and restore backups created in this launch\nAll rollback records are available in Settings",
+    "rollback_records": "Rollback Records",
+    "rollback_records_tooltip_title": "Rollback Records",
+    "rollback_records_tooltip": "Shows every historical backup created by previous operations. The main Rollback Manager only shows backups created in this launch; all rollback records are available in Settings.",
+    "backup_list_empty": "No backups",
+    "backup_list_current_empty": "No new backups in this launch",
+    "settings_saved": "Settings saved",
+    "duplicate_mod_title": "Duplicate Mods Detected",
+    "duplicate_mod_message": "The main ini files in these different mod folders contain matching hash values. Select which mods to disable in each group; the folder name will be prefixed with DISABLED_.",
+    "duplicate_mod_hash": "Duplicate hash",
+    "duplicate_mod_main_ini": "Main ini",
+    "duplicate_mod_disable_selected": "Disable Selected and Continue",
+    "duplicate_mod_cancel": "Cancel Fix",
+    "duplicate_mod_selection_required": "Each duplicate group must keep exactly one mod and disable the rest.",
+    "duplicate_mod_disable_failed": "Failed to Disable Mods",
+    "duplicate_mod_disabled_log": "Duplicate mod check: disabled {count} duplicate mod(s).",
+    "duplicate_mod_cancel_log": "Duplicate mod check: user canceled; repair stopped.",
+    "wet_fix": "Wetness Fix",
+    "wet_fix_desc": "Fix abnormal rain streaks when it rains. Works with some mods.",
+})
 
 
 def clamp01(value: float) -> float:
@@ -726,6 +895,145 @@ def file_sha256(path: Path) -> str:
                 break
             digest.update(chunk)
     return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class DuplicateModEntry:
+    mod_dir: Path
+    main_ini: Path
+
+
+@dataclass(frozen=True)
+class DuplicateModGroup:
+    hash_values: list[str]
+    entries: list[DuplicateModEntry]
+
+
+def display_relpath(base: Path, path: Path) -> str:
+    try:
+        return str(path.relative_to(base)).replace("\\", "/")
+    except ValueError:
+        return str(path)
+
+
+def is_disabled_mod_folder(path: Path) -> bool:
+    return path.name.upper().startswith(fixer.DISABLED_PREFIX)
+
+
+def is_main_ini_candidate(path: Path) -> bool:
+    if not path.is_file() or path.suffix.lower() != ".ini":
+        return False
+    if path.name.startswith("."):
+        return False
+    if path.name.upper().startswith(fixer.DISABLED_PREFIX):
+        return False
+    if path.name.casefold() == fixer.HOTFIX_INI_NAME.casefold():
+        return False
+    if fixer.OLD_BACKUP_NAME_RE.search(path.name):
+        return False
+    return True
+
+
+def normalized_mod_stem(value: str) -> str:
+    cleaned = value
+    if cleaned.upper().startswith(DISABLED_MOD_PREFIX):
+        cleaned = cleaned[len(DISABLED_MOD_PREFIX):]
+    elif cleaned.upper().startswith(fixer.DISABLED_PREFIX):
+        cleaned = cleaned[len(fixer.DISABLED_PREFIX):].lstrip("_- ")
+    return re.sub(r"[\s_\-]+", "", cleaned).casefold()
+
+
+def choose_main_ini(mod_dir: Path) -> Path | None:
+    try:
+        candidates = [child for child in mod_dir.iterdir() if is_main_ini_candidate(child)]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+
+    mod_key = normalized_mod_stem(mod_dir.name)
+
+    def score(path: Path) -> tuple[int, str]:
+        stem_key = normalized_mod_stem(path.stem)
+        exact_name = 0 if stem_key == mod_key else 1
+        return exact_name, path.name.casefold()
+
+    return sorted(candidates, key=score)[0]
+
+
+def iter_active_mod_folders(root: Path) -> list[Path]:
+    folders: list[Path] = []
+    stack = [root]
+    while stack:
+        current = stack.pop(0)
+        if current != root and (current.name.startswith(".") or is_disabled_mod_folder(current)):
+            continue
+        if choose_main_ini(current) is not None:
+            folders.append(current)
+            continue
+        try:
+            children = sorted(
+                (child for child in current.iterdir() if child.is_dir()),
+                key=lambda path: path.name.casefold(),
+            )
+        except OSError:
+            continue
+        stack.extend(children)
+    return folders
+
+
+def scan_duplicate_mod_main_inis(root: Path) -> list[DuplicateModGroup]:
+    by_hash_value: dict[str, list[DuplicateModEntry]] = {}
+    for mod_dir in iter_active_mod_folders(root):
+        main_ini = choose_main_ini(mod_dir)
+        if main_ini is None:
+            continue
+        try:
+            content, _encoding = fixer.load_text(main_ini)
+        except (OSError, UnicodeError):
+            continue
+        entry = DuplicateModEntry(mod_dir, main_ini)
+        for hash_value in fixer.collect_hash_values(content):
+            by_hash_value.setdefault(hash_value, []).append(entry)
+
+    combined: dict[tuple[str, ...], tuple[list[str], list[DuplicateModEntry]]] = {}
+    for hash_value, entries in by_hash_value.items():
+        unique_entries = sorted(
+            {fixer.path_identity(entry.mod_dir): entry for entry in entries}.values(),
+            key=lambda entry: str(entry.mod_dir).casefold(),
+        )
+        if len(unique_entries) <= 1:
+            continue
+        key = tuple(fixer.path_identity(entry.mod_dir) for entry in unique_entries)
+        if key not in combined:
+            combined[key] = ([], unique_entries)
+        combined[key][0].append(hash_value)
+
+    groups = [
+        DuplicateModGroup(sorted(hash_values), entries)
+        for hash_values, entries in combined.values()
+    ]
+    return sorted(groups, key=lambda group: str(group.entries[0].mod_dir).casefold())
+
+
+def disabled_mod_folder_target(mod_dir: Path) -> Path:
+    parent = mod_dir.parent
+    base_name = f"{DISABLED_MOD_PREFIX}{mod_dir.name}"
+    candidate = parent / base_name
+    if not candidate.exists():
+        return candidate
+    counter = 2
+    while True:
+        candidate = parent / f"{base_name}_{counter}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def disable_mod_folder(mod_dir: Path) -> Path:
+    target = disabled_mod_folder_target(mod_dir)
+    mod_dir.rename(target)
+    return target
 
 
 def temp_download_path(destination: Path) -> Path:
@@ -1206,6 +1514,479 @@ class SearchHeaderIcon(tk.Canvas):
         self.draw()
 
 
+class StableTextureOffsetStepper(tk.Canvas):
+    def __init__(
+        self,
+        parent: tk.Widget,
+        variable: tk.IntVar,
+        colors: dict[str, str],
+        title_provider: object,
+        body_provider: object,
+    ) -> None:
+        self.variable = variable
+        self.colors = colors
+        self.title_provider = title_provider
+        self.body_provider = body_provider
+        self.state = tk.NORMAL
+        self.tooltip_window: tk.Toplevel | None = None
+        self._last_draw_signature: tuple[object, ...] | None = None
+        parent_bg = str(parent.cget("bg")) if "bg" in parent.keys() else colors["panel_2"]
+        super().__init__(
+            parent,
+            width=70,
+            height=58,
+            bg=parent_bg,
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+        )
+        self.bind("<Button-1>", self.on_click)
+        self.bind("<MouseWheel>", self.on_mousewheel)
+        self.bind("<Button-4>", lambda _event: self.step(1))
+        self.bind("<Button-5>", lambda _event: self.step(-1))
+        self.bind("<Enter>", self.show_tooltip)
+        self.bind("<Motion>", self.move_tooltip)
+        self.bind("<Leave>", self.hide_tooltip)
+        self.variable.trace_add("write", lambda *_: self.draw())
+        self.draw()
+
+    def current_index(self) -> int:
+        value = self.variable.get()
+        if value in STABLE_TEXTURE_OFFSETS:
+            return STABLE_TEXTURE_OFFSETS.index(value)
+        self.variable.set(0)
+        return STABLE_TEXTURE_OFFSETS.index(0)
+
+    def step(self, delta: int) -> None:
+        if self.state == tk.DISABLED:
+            return
+        index = (self.current_index() + delta) % len(STABLE_TEXTURE_OFFSETS)
+        self.variable.set(STABLE_TEXTURE_OFFSETS[index])
+
+    def on_click(self, event: tk.Event[tk.Misc]) -> None:
+        self.step(1 if event.y < 29 else -1)
+
+    def on_mousewheel(self, event: tk.Event[tk.Misc]) -> None:
+        self.step(1 if getattr(event, "delta", 0) > 0 else -1)
+
+    def tooltip_title(self) -> str:
+        provider = self.title_provider
+        return str(provider() if callable(provider) else provider)
+
+    def tooltip_text(self) -> str:
+        provider = self.body_provider
+        return str(provider() if callable(provider) else provider)
+
+    def show_tooltip(self, event: tk.Event[tk.Misc]) -> None:
+        if self.tooltip_window is not None:
+            self.move_tooltip(event)
+            return
+        tooltip = tk.Toplevel(self)
+        tooltip.overrideredirect(True)
+        tooltip.configure(bg=self.colors["accent"])
+        body = tk.Frame(tooltip, bg=self.colors["panel"], padx=12, pady=9)
+        body.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+        tk.Label(
+            body,
+            text=self.tooltip_title(),
+            bg=self.colors["panel"],
+            fg=self.colors["text"],
+            font=(UI_FONT_FAMILY, UI_SMALL_FONT_SIZE),
+            anchor="w",
+        ).pack(anchor="w")
+        tk.Label(
+            body,
+            text=self.tooltip_text(),
+            bg=self.colors["panel"],
+            fg=self.colors["muted"],
+            font=(UI_FONT_FAMILY, 10),
+            justify=tk.LEFT,
+            wraplength=360,
+        ).pack(anchor="w", pady=(5, 0))
+        self.tooltip_window = tooltip
+        self.move_tooltip(event)
+
+    def move_tooltip(self, event: tk.Event[tk.Misc]) -> None:
+        if self.tooltip_window is None:
+            return
+        self.tooltip_window.geometry(f"+{event.x_root + 16}+{event.y_root + 14}")
+
+    def hide_tooltip(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        if self.tooltip_window is None:
+            return
+        with contextlib.suppress(tk.TclError):
+            self.tooltip_window.destroy()
+        self.tooltip_window = None
+
+    def draw(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        width = max(1, int(self.cget("width")))
+        height = max(1, int(self.cget("height")))
+        disabled = self.state == tk.DISABLED
+        value = self.variable.get()
+        fill = self.colors["panel"] if not disabled else self.colors["panel_2"]
+        outline = self.colors["accent"] if not disabled else self.colors["border"]
+        accent = self.colors["accent"] if not disabled else self.colors["muted"]
+        text_fill = self.colors["text"] if not disabled else self.colors["muted"]
+        signature = (value, self.state, fill, outline, accent, text_fill)
+        if self._last_draw_signature == signature:
+            return
+        self._last_draw_signature = signature
+        self.delete("all")
+        round_rect(self, 1, 1, width - 1, height - 1, 4, fill=fill, outline=outline, width=1)
+        self.create_polygon(width // 2, 8, width // 2 - 8, 18, width // 2 + 8, 18, fill=accent, outline="")
+        self.create_text(
+            width // 2,
+            height // 2,
+            text=str(value),
+            fill=text_fill,
+            font=(UI_FONT_FAMILY, 17),
+        )
+        self.create_polygon(width // 2, height - 8, width // 2 - 8, height - 18, width // 2 + 8, height - 18, fill=accent, outline="")
+
+    def configure(self, cnf: object | None = None, **kwargs: object) -> object:
+        if cnf:
+            if isinstance(cnf, dict):
+                kwargs.update(cnf)
+            else:
+                return super().configure(cnf)
+        redraw = False
+        canvas_kwargs: dict[str, object] = {}
+        for key, value in kwargs.items():
+            if key == "state":
+                self.state = str(value)
+                super().configure(cursor="arrow" if self.state == tk.DISABLED else "hand2")
+                if self.state == tk.DISABLED:
+                    self.hide_tooltip()
+                redraw = True
+            else:
+                canvas_kwargs[key] = value
+        if canvas_kwargs:
+            super().configure(**canvas_kwargs)
+        if redraw:
+            self._last_draw_signature = None
+            self.draw()
+        return None
+
+    config = configure
+
+    def set_colors(self, colors: dict[str, str]) -> None:
+        self.colors = colors
+        self.configure(bg=colors["panel_2"])
+        self.hide_tooltip()
+        self._last_draw_signature = None
+        self.draw()
+
+
+class BackupRetentionStepper(tk.Canvas):
+    def __init__(
+        self,
+        parent: tk.Widget,
+        variable: tk.IntVar,
+        colors: dict[str, str],
+        command: object | None = None,
+        minimum: int = MIN_BACKUP_RETENTION_LIMIT,
+        maximum: int = MAX_BACKUP_RETENTION_LIMIT,
+    ) -> None:
+        self.variable = variable
+        self.colors = colors
+        self.command = command
+        self.minimum = minimum
+        self.maximum = maximum
+        self.state = tk.NORMAL
+        self._last_draw_signature: tuple[object, ...] | None = None
+        parent_bg = str(parent.cget("bg")) if "bg" in parent.keys() else colors["panel_2"]
+        super().__init__(
+            parent,
+            width=92,
+            height=58,
+            bg=parent_bg,
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+        )
+        self.bind("<Button-1>", self.on_click)
+        self.bind("<MouseWheel>", self.on_mousewheel)
+        self.bind("<Button-4>", lambda _event: self.step(1))
+        self.bind("<Button-5>", lambda _event: self.step(-1))
+        self.variable.trace_add("write", lambda *_: self.draw())
+        self.normalize()
+        self.draw()
+
+    def normalize(self) -> int:
+        value = clamp_backup_retention_limit(self.variable.get())
+        if value != self.variable.get():
+            self.variable.set(value)
+        return value
+
+    def step(self, delta: int) -> None:
+        if self.state == tk.DISABLED:
+            return
+        value = max(self.minimum, min(self.maximum, self.normalize() + delta))
+        if value != self.variable.get():
+            self.variable.set(value)
+            if callable(self.command):
+                self.command()
+
+    def on_click(self, event: tk.Event[tk.Misc]) -> None:
+        self.step(1 if event.y < 29 else -1)
+
+    def on_mousewheel(self, event: tk.Event[tk.Misc]) -> None:
+        self.step(1 if getattr(event, "delta", 0) > 0 else -1)
+
+    def draw(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        width = max(1, int(self.cget("width")))
+        height = max(1, int(self.cget("height")))
+        disabled = self.state == tk.DISABLED
+        value = self.normalize()
+        fill = self.colors["panel"] if not disabled else self.colors["panel_2"]
+        outline = self.colors["accent"] if not disabled else self.colors["border"]
+        accent = self.colors["accent"] if not disabled else self.colors["muted"]
+        text_fill = self.colors["text"] if not disabled else self.colors["muted"]
+        signature = (value, self.state, fill, outline, accent, text_fill)
+        if self._last_draw_signature == signature:
+            return
+        self._last_draw_signature = signature
+        self.delete("all")
+        round_rect(self, 1, 1, width - 1, height - 1, 4, fill=fill, outline=outline, width=1)
+        self.create_polygon(width // 2, 8, width // 2 - 8, 18, width // 2 + 8, 18, fill=accent, outline="")
+        self.create_text(width // 2, height // 2, text=str(value), fill=text_fill, font=(UI_FONT_FAMILY, 18))
+        self.create_polygon(width // 2, height - 8, width // 2 - 8, height - 18, width // 2 + 8, height - 18, fill=accent, outline="")
+
+    def configure(self, cnf: object | None = None, **kwargs: object) -> object:
+        if cnf:
+            if isinstance(cnf, dict):
+                kwargs.update(cnf)
+            else:
+                return super().configure(cnf)
+        redraw = False
+        canvas_kwargs: dict[str, object] = {}
+        for key, value in kwargs.items():
+            if key == "state":
+                self.state = str(value)
+                super().configure(cursor="arrow" if self.state == tk.DISABLED else "hand2")
+                redraw = True
+            else:
+                canvas_kwargs[key] = value
+        if canvas_kwargs:
+            super().configure(**canvas_kwargs)
+        if redraw:
+            self._last_draw_signature = None
+            self.draw()
+        return None
+
+    config = configure
+
+    def set_colors(self, colors: dict[str, str]) -> None:
+        self.colors = colors
+        self.configure(bg=colors["panel_2"])
+        self._last_draw_signature = None
+        self.draw()
+
+
+class BackupRetentionLineInput(tk.Frame):
+    def __init__(
+        self,
+        parent: tk.Widget,
+        variable: tk.IntVar,
+        colors: dict[str, str],
+        command: object | None = None,
+    ) -> None:
+        self.variable = variable
+        self.colors = colors
+        self.command = command
+        self.entry_var = tk.StringVar(value=str(clamp_backup_retention_limit(variable.get())))
+        self._updating = False
+        parent_bg = str(parent.cget("bg")) if "bg" in parent.keys() else colors["panel_2"]
+        super().__init__(parent, bg=parent_bg, cursor="xterm")
+
+        self.entry = tk.Entry(
+            self,
+            textvariable=self.entry_var,
+            width=4,
+            justify=tk.CENTER,
+            relief=tk.FLAT,
+            bd=0,
+            highlightthickness=0,
+            bg=parent_bg,
+            fg=colors["text"],
+            insertbackground=colors["accent"],
+            selectbackground=colors["accent"],
+            selectforeground=colors["bg"],
+            font=(UI_FONT_FAMILY, 20),
+            cursor="xterm",
+        )
+        self.entry.pack(fill=tk.X)
+        self.line = tk.Frame(self, bg=colors["accent"], height=2)
+        self.line.pack(fill=tk.X, padx=4, pady=(2, 0))
+        self.entry.bind("<FocusIn>", self.on_focus_in)
+        self.entry.bind("<FocusOut>", self.commit)
+        self.entry.bind("<Return>", self.commit_and_release)
+        self.entry.bind("<Escape>", self.reset_and_release)
+        self.entry.bind("<KeyRelease>", self.limit_length)
+        self.variable.trace_add("write", self.sync_from_variable)
+
+    def on_focus_in(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        self.entry.after_idle(lambda: self.entry.selection_range(0, tk.END))
+
+    def limit_length(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        value = self.entry_var.get()
+        cleaned = "".join(ch for ch in value if ch.isdigit())
+        if len(cleaned) > 2:
+            cleaned = cleaned[:2]
+        if cleaned != value:
+            self.entry_var.set(cleaned)
+
+    def commit_and_release(self, _event: tk.Event[tk.Misc] | None = None) -> str:
+        self.commit()
+        self.master.focus_set()
+        return "break"
+
+    def reset_and_release(self, _event: tk.Event[tk.Misc] | None = None) -> str:
+        self.entry_var.set(str(clamp_backup_retention_limit(self.variable.get())))
+        self.master.focus_set()
+        return "break"
+
+    def commit(self, _event: tk.Event[tk.Misc] | None = None, invoke_command: bool = True) -> None:
+        value = clamp_backup_retention_limit(self.entry_var.get())
+        self._updating = True
+        try:
+            self.variable.set(value)
+            self.entry_var.set(str(value))
+        finally:
+            self._updating = False
+        if invoke_command and callable(self.command):
+            self.command()
+
+    def sync_from_variable(self, *_args: object) -> None:
+        if self._updating or self.entry.focus_get() == self.entry:
+            return
+        self.entry_var.set(str(clamp_backup_retention_limit(self.variable.get())))
+
+    def set_colors(self, colors: dict[str, str]) -> None:
+        self.colors = colors
+        bg = colors["panel_2"]
+        self.configure(bg=bg)
+        self.entry.configure(
+            bg=bg,
+            fg=colors["text"],
+            insertbackground=colors["accent"],
+            selectbackground=colors["accent"],
+            selectforeground=colors["bg"],
+        )
+        self.line.configure(bg=colors["accent"])
+
+
+class MergeModeSwitch(tk.Canvas):
+    def __init__(
+        self,
+        parent: tk.Widget,
+        app: "FixerGui",
+        variable: tk.BooleanVar,
+        command: object | None = None,
+    ) -> None:
+        self.app = app
+        self.variable = variable
+        self.command = command
+        self.on_label = app.tr("stable_merge_on")
+        self.off_label = app.tr("stable_merge_off")
+        self.progress = 1.0 if variable.get() else 0.0
+        self.after_id: str | None = None
+        bg = str(parent.cget("bg")) if "bg" in parent.keys() else app.colors["panel_2"]
+        super().__init__(
+            parent,
+            width=138,
+            height=36,
+            bg=bg,
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+        )
+        self.bind("<Button-1>", self.on_click)
+        self.variable.trace_add("write", self.on_variable_changed)
+        self.draw()
+
+    def on_click(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        self.variable.set(not self.variable.get())
+        if callable(self.command):
+            self.command()
+
+    def on_variable_changed(self, *_args: object) -> None:
+        self.animate_to(1.0 if self.variable.get() else 0.0)
+
+    def animate_to(self, target: float) -> None:
+        target = clamp01(target)
+        if self.after_id is not None:
+            with contextlib.suppress(tk.TclError):
+                self.after_cancel(self.after_id)
+            self.after_id = None
+
+        start = self.progress
+        frames = 10
+
+        def step(frame: int = 1) -> None:
+            blend = frame / frames
+            self.progress = start + (target - start) * blend
+            self.draw()
+            if frame < frames:
+                self.after_id = self.after(14, lambda: step(frame + 1))
+            else:
+                self.after_id = None
+                self.progress = target
+                self.draw()
+
+        step()
+
+    def set_labels(self, on_label: str, off_label: str) -> None:
+        self.on_label = on_label
+        self.off_label = off_label
+        self.draw()
+
+    def draw(self) -> None:
+        colors = self.app.colors
+        width = max(1, int(self.cget("width")))
+        height = max(1, int(self.cget("height")))
+        progress = clamp01(self.progress)
+        self.delete("all")
+        draw_capsule(self, 1, 2, width - 1, height - 2, fill=colors["switch_track"], outline=colors["border"], width=1)
+
+        half_width = (width - 6) / 2
+        active_x1 = 3 + (1.0 - progress) * half_width
+        active_x2 = active_x1 + half_width
+        round_rect(
+            self,
+            int(active_x1),
+            4,
+            int(active_x2),
+            height - 4,
+            12,
+            fill=mix_color(colors["accent"], LOG_SWITCH_ON_YELLOW, progress),
+            outline="",
+        )
+
+        on_active = progress >= 0.5
+        on_fill = colors["bg"] if on_active else colors["text"]
+        off_fill = colors["bg"] if not on_active else colors["text"]
+        self.create_text(
+            width * 0.27,
+            height // 2,
+            text=self.on_label,
+            fill=on_fill,
+            font=(UI_FONT_FAMILY, 9),
+        )
+        self.create_text(
+            width * 0.73,
+            height // 2,
+            text=self.off_label,
+            fill=off_fill,
+            font=(UI_FONT_FAMILY, 9),
+        )
+
+    def set_colors(self, colors: dict[str, str]) -> None:
+        parent_bg = str(self.master.cget("bg")) if self.master is not None and "bg" in self.master.keys() else colors["panel_2"]
+        self.configure(bg=parent_bg)
+        self.draw()
+
+
 class TechOptionRow(tk.Frame):
     def __init__(
         self,
@@ -1215,19 +1996,27 @@ class TechOptionRow(tk.Frame):
         title: str,
         desc: str,
         colors: dict[str, str],
+        icon_kind: str = "text",
     ) -> None:
         super().__init__(parent, bg=colors["panel_2"], cursor="hand2")
         self.variable = variable
         self.colors = colors
         self.desc = desc
+        self.icon_kind = icon_kind
         self.check = tk.Canvas(self, width=22, height=22, bg=colors["panel_2"], highlightthickness=0, bd=0, cursor="hand2")
         self.check.pack(side=tk.LEFT, padx=(10, 14))
         icon_bg = colors["panel"]
         self.icon_box = tk.Frame(self, bg=icon_bg, width=58, height=58, highlightthickness=1, highlightbackground=colors["border"])
         self.icon_box.pack(side=tk.LEFT, pady=10)
         self.icon_box.pack_propagate(False)
-        self.icon_label = tk.Label(self.icon_box, text=icon, bg=icon_bg, fg=colors["accent"], font=(SYMBOL_FONT_FAMILY, 26))
-        self.icon_label.pack(expand=True)
+        self.icon_label: tk.Label | None = None
+        self.icon_canvas: tk.Canvas | None = None
+        if icon_kind == "wet":
+            self.icon_canvas = tk.Canvas(self.icon_box, width=58, height=58, bg=icon_bg, highlightthickness=0, bd=0, cursor="hand2")
+            self.icon_canvas.pack(fill=tk.BOTH, expand=True)
+        else:
+            self.icon_label = tk.Label(self.icon_box, text=icon, bg=icon_bg, fg=colors["accent"], font=(SYMBOL_FONT_FAMILY, 26))
+            self.icon_label.pack(expand=True)
         self.text_area = tk.Frame(self, bg=colors["panel_2"])
         self.text_area.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(18, 10), pady=10)
         self.title_label = tk.Label(
@@ -1254,9 +2043,13 @@ class TechOptionRow(tk.Frame):
             wraplength=420,
         )
         self.desc_label.pack(anchor="w", fill=tk.X, pady=(6, 0))
-        for widget in (self, self.check, self.icon_box, self.icon_label, self.text_area, self.title_label, self.desc_label):
+        icon_widget = self.icon_canvas if self.icon_canvas is not None else self.icon_label
+        for widget in (self, self.check, self.icon_box, icon_widget, self.text_area, self.title_label, self.desc_label):
+            if widget is None:
+                continue
             widget.bind("<Button-1>", self.toggle)
         self.bind("<Configure>", self.update_wrap)
+        self.text_area.bind("<Configure>", self.update_wrap, add="+")
         self.variable.trace_add("write", lambda *_: self.draw())
         self.draw()
 
@@ -1264,7 +2057,10 @@ class TechOptionRow(tk.Frame):
         self.variable.set(not self.variable.get())
 
     def update_wrap(self, _event: tk.Event[tk.Misc] | None = None) -> None:
-        wrap = max(240, self.winfo_width() - 160)
+        wrap = self.text_area.winfo_width()
+        if wrap <= 1:
+            wrap = max(1, self.winfo_width() - self.text_area.winfo_x() - 12)
+        wrap = max(240, wrap - 2)
         self.title_label.configure(wraplength=wrap, justify=tk.LEFT)
         self.desc_label.configure(wraplength=wrap, justify=tk.LEFT)
 
@@ -1281,13 +2077,38 @@ class TechOptionRow(tk.Frame):
         round_rect(self.check, 2, 2, 20, 20, 4, fill=fill, outline=outline, width=1)
         if checked:
             self.check.create_line(6, 11, 10, 15, 17, 6, fill="#101317", width=2, capstyle=tk.ROUND, joinstyle=tk.ROUND)
+        self.draw_icon()
+
+    def draw_icon(self) -> None:
+        if self.icon_canvas is None:
+            return
+        self.icon_canvas.delete("all")
+        wave_color = self.colors["accent"]
+        for baseline in (19, 29, 39):
+            points: list[float] = []
+            for step in range(49):
+                progress = step / 48
+                x = 12 + 34 * progress
+                y = baseline + math.sin(progress * math.tau) * 3.0
+                points.extend((x, y))
+            self.icon_canvas.create_line(
+                *points,
+                fill=wave_color,
+                width=3,
+                smooth=True,
+                capstyle=tk.ROUND,
+                joinstyle=tk.ROUND,
+            )
 
     def set_colors(self, colors: dict[str, str]) -> None:
         self.colors = colors
         self.configure(bg=colors["panel_2"])
         self.check.configure(bg=colors["panel_2"])
         self.icon_box.configure(bg=colors["panel"], highlightbackground=colors["border"])
-        self.icon_label.configure(bg=colors["panel"], fg=colors["accent"])
+        if self.icon_label is not None:
+            self.icon_label.configure(bg=colors["panel"], fg=colors["accent"])
+        if self.icon_canvas is not None:
+            self.icon_canvas.configure(bg=colors["panel"])
         self.text_area.configure(bg=colors["panel_2"])
         self.title_label.configure(bg=colors["panel_2"], fg=colors["text"])
         self.desc_label.configure(bg=colors["panel_2"], fg=colors["muted"])
@@ -1709,6 +2530,120 @@ class LanguageSwitch(tk.Canvas):
         self.draw()
 
 
+class SettingsIconButton(tk.Canvas):
+    def __init__(self, parent: tk.Widget, app: "FixerGui") -> None:
+        self.app = app
+        self.hover = False
+        super().__init__(
+            parent,
+            width=34,
+            height=30,
+            bg=app.colors["bg"],
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+        )
+        self.bind("<Button-1>", lambda _event: app.open_settings())
+        self.bind("<Enter>", self.on_enter)
+        self.bind("<Leave>", self.on_leave)
+        self.draw()
+
+    def on_enter(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        self.hover = True
+        self.draw()
+
+    def on_leave(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        self.hover = False
+        self.draw()
+
+    def draw(self) -> None:
+        colors = self.app.colors
+        self.delete("all")
+        fill = colors["text"] if self.hover else colors["accent"]
+        self.create_text(
+            17,
+            15,
+            text="\u2699",
+            fill=fill,
+            font=(SYMBOL_FONT_FAMILY, 18, "bold"),
+        )
+
+    def set_colors(self, colors: dict[str, str]) -> None:
+        self.configure(bg=colors["bg"])
+        self.draw()
+
+
+class WidgetTooltip:
+    def __init__(self, widget: tk.Widget, colors_provider: object, title_provider: object, body_provider: object) -> None:
+        self.widget = widget
+        self.colors_provider = colors_provider
+        self.title_provider = title_provider
+        self.body_provider = body_provider
+        self.window: tk.Toplevel | None = None
+        widget.bind("<Enter>", self.show, add="+")
+        widget.bind("<Motion>", self.move, add="+")
+        widget.bind("<Leave>", self.hide, add="+")
+
+    def colors(self) -> dict[str, str]:
+        provider = self.colors_provider
+        return dict(provider() if callable(provider) else provider)
+
+    def title(self) -> str:
+        provider = self.title_provider
+        return str(provider() if callable(provider) else provider)
+
+    def body(self) -> str:
+        provider = self.body_provider
+        return str(provider() if callable(provider) else provider)
+
+    def show(self, event: tk.Event[tk.Misc]) -> None:
+        if self.window is not None:
+            self.move(event)
+            return
+        body_text = self.body()
+        if not body_text:
+            return
+        colors = self.colors()
+        tooltip = tk.Toplevel(self.widget)
+        tooltip.overrideredirect(True)
+        tooltip.configure(bg=colors["accent"])
+        body = tk.Frame(tooltip, bg=colors["panel"], padx=12, pady=9)
+        body.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+        title_text = self.title()
+        if title_text:
+            tk.Label(
+                body,
+                text=title_text,
+                bg=colors["panel"],
+                fg=colors["text"],
+                font=(UI_FONT_FAMILY, UI_SMALL_FONT_SIZE),
+                anchor="w",
+            ).pack(anchor="w")
+        tk.Label(
+            body,
+            text=body_text,
+            bg=colors["panel"],
+            fg=colors["muted"],
+            font=(UI_FONT_FAMILY, 10),
+            justify=tk.LEFT,
+            wraplength=330,
+        ).pack(anchor="w", pady=(5 if title_text else 0, 0))
+        self.window = tooltip
+        self.move(event)
+
+    def move(self, event: tk.Event[tk.Misc]) -> None:
+        if self.window is None:
+            return
+        self.window.geometry(f"+{event.x_root + 16}+{event.y_root + 14}")
+
+    def hide(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        if self.window is None:
+            return
+        with contextlib.suppress(tk.TclError):
+            self.window.destroy()
+        self.window = None
+
+
 class LogPowerSwitch(tk.Frame):
     def __init__(self, parent: tk.Widget, app: "FixerGui", text: str, command: object) -> None:
         self.app = app
@@ -2120,9 +3055,17 @@ class FixerGui:
         self.theme_name = "dark"
         self.language = "zh"
         self.colors = THEMES[self.theme_name]
+        self.user_settings = load_user_settings()
         self.target_dir = tk.StringVar(value=str(initial_target_dir or default_target_dir()))
         self.stable_texture = tk.BooleanVar(value=False)
+        self.stable_texture_offset = tk.IntVar(value=0)
+        self.backup_retention_limit = tk.IntVar(value=int(self.user_settings["backup_retention_limit"]))
+        self.stable_merge_same_resources = tk.BooleanVar(
+            value=bool(self.user_settings["stable_merge_same_resources"])
+        )
+        self.backup_display_started_at = time.time()
         self.fixmenu = tk.BooleanVar(value=False)
+        self.wet_fix = tk.BooleanVar(value=False)
         self.include_disabled = tk.BooleanVar(value=False)
         self.force_new_version = tk.BooleanVar(value=False)
         self.debug_log = tk.BooleanVar(value=True)
@@ -2144,6 +3087,18 @@ class FixerGui:
         self.log_title_label: tk.Label | None = None
         self.log_toggle: LogPowerSwitch | DisclosureToggle | None = None
         self.update_button: RoundedButton | None = None
+        self.settings_button: SettingsIconButton | None = None
+        self.settings_window: tk.Toplevel | None = None
+        self.settings_widgets: dict[str, tk.Widget] = {}
+        self.backup_retention_stepper: BackupRetentionStepper | None = None
+        self.backup_retention_input: BackupRetentionLineInput | None = None
+        self.stable_merge_switch: MergeModeSwitch | None = None
+        self.stable_merge_tooltip: WidgetTooltip | None = None
+        self.settings_update_button: RoundedButton | None = None
+        self.settings_history_button: RoundedButton | None = None
+        self.settings_history_tooltip: WidgetTooltip | None = None
+        self.backup_window_show_all = False
+        self.stable_offset_stepper: StableTextureOffsetStepper | None = None
         self.log_default_text: str | None = None
         self.log_expanded = False
         self.log_animating = False
@@ -2154,7 +3109,7 @@ class FixerGui:
         self.language_animating = False
         self.language_after_id: str | None = None
         self.language_fade_after_id: str | None = None
-        self.contour_layers: list[tuple[tk.Canvas, tk.Widget, int, float, int]] = []
+        self.contour_layers: list[tuple[tk.Canvas, tk.Widget, int, float, int, bool]] = []
         self.contour_redraw_after_id: str | None = None
         self.contour_source_image: object | None = None
         self.contour_tile_cache: dict[tuple[str, str, float], object] = {}
@@ -2163,6 +3118,7 @@ class FixerGui:
         self.log_timer_resolution_active = False
 
         self.build_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.bind("<Configure>", self.on_root_configure, add="+")
         self.root.after(80, self.poll_log_queue)
         self.root.after(UPDATE_CHECK_DELAY_MS, lambda: self.start_update_check(manual=False))
@@ -2249,10 +3205,13 @@ class FixerGui:
     def _default_log_text_for_current_language(self) -> str:
         stable_state = self.tr("enabled") if self.stable_texture.get() else self.tr("disabled")
         fixmenu_state = self.tr("enabled") if self.fixmenu.get() else self.tr("disabled")
+        wet_fix_state = self.tr("enabled") if self.wet_fix.get() else self.tr("disabled")
         return (
             f"[12:45:10]  {self.tr('ready')}\n"
             f"[12:45:11]  {self.tr('target_path')}: {self.target_dir.get()}\n"
-            f"[12:45:11]  {self.tr('repair_status')}: {self.tr('stable_texture')} = {stable_state}  |  {self.tr('fix_menu')} = {fixmenu_state}\n"
+            f"[12:45:11]  {self.tr('repair_status')}: {self.tr('stable_texture')} = {stable_state}"
+            f" ({self.stable_texture_offset.get()})  |  {self.tr('fix_menu')} = {fixmenu_state}"
+            f"  |  {self.tr('wet_fix')} = {wet_fix_state}\n"
             f"[12:45:11]  {self.tr('click_start')}\n"
         )
 
@@ -2571,6 +3530,8 @@ class FixerGui:
 
     def update_language_texts(self) -> None:
         self.hide_task_tooltips()
+        if self.stable_offset_stepper is not None:
+            self.stable_offset_stepper.hide_tooltip()
         self.app_title_label.configure(text=f"{self.tr('app_header')}  v{APP_VERSION}")
         self.target_header_label.configure(text=self.tr("target_title"))
         self.options_header_label.configure(text=self.tr("repair_title"))
@@ -2579,6 +3540,7 @@ class FixerGui:
         self.target_hint_label.configure(text=self.tr("target_hint"))
         self.stable_texture_row.set_text(self.tr("stable_texture"), self.tr("stable_texture_desc"))
         self.fixmenu_row.set_text(self.tr("fix_menu"), self.tr("fix_menu_desc"))
+        self.wet_fix_row.set_text(self.tr("wet_fix"), self.tr("wet_fix_desc"))
         self.fix_button.set_text(self.tr("fix_title"), self.tr("fix_tip"), "", self.tr("fix_action"))
         self.preview_button.set_text(self.tr("preview_title"), self.tr("preview_tip"), "", self.tr("preview_action"))
         self.rollback_button.set_text(self.tr("rollback_title"), self.tr("rollback_tip"), "", self.tr("rollback_action"))
@@ -2592,6 +3554,13 @@ class FixerGui:
         self.refresh_default_log_language()
         if self.update_button is not None:
             self.update_button.configure(text=self.tr("check_update"))
+        self.refresh_settings_window_language()
+        if self.backup_window is not None:
+            with contextlib.suppress(tk.TclError):
+                if self.backup_window.winfo_exists():
+                    title_key = "rollback_records" if self.backup_window_show_all else "rollback_window"
+                    self.backup_window.title(self.tr(title_key))
+                    self.refresh_backup_list()
 
     def rebuild_ui_preserving_log(self) -> None:
         log_text = self.log_box.get("1.0", "end-1c") if self.log_box is not None else None
@@ -2604,6 +3573,7 @@ class FixerGui:
         self.log_header = None
         self.log_area = None
         self.log_toggle = None
+        self.stable_offset_stepper = None
         self.log_expanded = was_expanded
         self.debug_log.set(was_expanded)
         self.build_ui(log_text=log_text)
@@ -2966,19 +3936,30 @@ class FixerGui:
         root_x = self.root.winfo_rootx()
         root_y = self.root.winfo_rooty()
         colors = THEMES[self.theme_name]
-        live_layers: list[tuple[tk.Canvas, tk.Widget, int, float, int]] = []
-        for background, parent, phase_offset, density, top_offset in self.contour_layers:
+        live_layers: list[tuple[tk.Canvas, tk.Widget, int, float, int, bool]] = []
+        for background, parent, phase_offset, density, top_offset, cover_padding in self.contour_layers:
             try:
                 if not background.winfo_exists() or not parent.winfo_exists():
                     continue
-                width = parent.winfo_width()
-                height = max(1, parent.winfo_height() - top_offset)
+                pad_x = 0
+                pad_y = 0
+                with contextlib.suppress(tk.TclError, ValueError):
+                    pad_x = int(str(parent.cget("padx") or 0))
+                with contextlib.suppress(tk.TclError, ValueError):
+                    pad_y = int(str(parent.cget("pady") or 0))
+                padding_width = 0 if cover_padding else pad_x * 2
+                padding_height = 0 if cover_padding else pad_y * 2
+                width = max(1, parent.winfo_width() - padding_width)
+                height = max(1, parent.winfo_height() - top_offset - padding_height)
                 if width <= 1 or height <= 1:
-                    live_layers.append((background, parent, phase_offset, density, top_offset))
+                    live_layers.append((background, parent, phase_offset, density, top_offset, cover_padding))
                     continue
-                background.place_configure(x=0, y=top_offset, relwidth=1, height=height)
-                origin_x = parent.winfo_rootx() - root_x
-                origin_y = parent.winfo_rooty() - root_y + top_offset
+                if cover_padding:
+                    background.place_configure(x=-pad_x, y=top_offset - pad_y, relwidth=0, width=width, height=height)
+                else:
+                    background.place_configure(x=0, y=top_offset, relwidth=1, height=height)
+                origin_x = background.winfo_rootx() - root_x
+                origin_y = background.winfo_rooty() - root_y
                 signature = (
                     width,
                     height,
@@ -3007,11 +3988,65 @@ class FixerGui:
                         background.create_image(0, 0, anchor="nw", image=photo, tags="contours")
                         self.contour_photo_refs[id(background)] = photo
                     background._contour_signature = signature  # type: ignore[attr-defined]
+                if getattr(background, "_settings_author_enabled", False):
+                    self.draw_settings_author(background, width, height)
                 background.tk.call("lower", background._w)
-                live_layers.append((background, parent, phase_offset, density, top_offset))
+                live_layers.append((background, parent, phase_offset, density, top_offset, cover_padding))
             except tk.TclError:
                 continue
         self.contour_layers = live_layers
+
+    def draw_settings_author(self, canvas: tk.Canvas, width: int, height: int) -> None:
+        if width <= 1 or height <= 1:
+            canvas.delete("settings_author")
+            canvas._settings_author_item = None  # type: ignore[attr-defined]
+            return
+        colors = THEMES[self.theme_name]
+        hover = bool(getattr(canvas, "_settings_author_hover", False))
+        fill = colors["text"] if hover else colors["accent"]
+        item = getattr(canvas, "_settings_author_item", None)
+        if item is not None:
+            try:
+                canvas.coords(item, width - 8, height - 8)
+                canvas.itemconfigure(item, fill=fill, font=(UI_FONT_FAMILY, UI_SMALL_FONT_SIZE))
+                canvas.tag_raise("settings_author")
+                return
+            except tk.TclError:
+                canvas._settings_author_item = None  # type: ignore[attr-defined]
+
+        item = canvas.create_text(
+            width - 8,
+            height - 8,
+            text="by SWAGost",
+            anchor="se",
+            fill=fill,
+            font=(UI_FONT_FAMILY, UI_SMALL_FONT_SIZE),
+            tags=("settings_author",),
+        )
+        canvas._settings_author_item = item  # type: ignore[attr-defined]
+        canvas.tag_raise("settings_author")
+
+    def set_settings_author_hover(self, canvas: tk.Canvas, hover: bool) -> None:
+        canvas._settings_author_hover = hover  # type: ignore[attr-defined]
+        canvas.configure(cursor="hand2" if hover else "")
+        colors = THEMES[self.theme_name]
+        fill = colors["text"] if hover else colors["accent"]
+        try:
+            item = getattr(canvas, "_settings_author_item", None)
+            if item is None:
+                raise tk.TclError
+            canvas.itemconfigure(item, fill=fill)
+        except tk.TclError:
+            self.draw_settings_author(canvas, max(1, canvas.winfo_width()), max(1, canvas.winfo_height()))
+
+    def install_settings_author(self, canvas: tk.Canvas) -> None:
+        canvas._settings_author_enabled = True  # type: ignore[attr-defined]
+        canvas._settings_author_hover = False  # type: ignore[attr-defined]
+        canvas._settings_author_item = None  # type: ignore[attr-defined]
+        canvas.tag_bind("settings_author", "<Button-1>", self.open_github_link)
+        canvas.tag_bind("settings_author", "<Enter>", lambda _event, c=canvas: self.set_settings_author_hover(c, True))
+        canvas.tag_bind("settings_author", "<Leave>", lambda _event, c=canvas: self.set_settings_author_hover(c, False))
+        self.draw_settings_author(canvas, max(1, canvas.winfo_width()), max(1, canvas.winfo_height()))
 
     def attach_contour_background(
         self,
@@ -3019,11 +4054,12 @@ class FixerGui:
         phase_offset: int,
         density: float = 1.0,
         top_offset: int = 0,
+        cover_padding: bool = False,
     ) -> tk.Canvas:
         background = tk.Canvas(parent, bg=self.colors["bg"], highlightthickness=0, bd=0)
         background.place(x=0, y=top_offset, relwidth=1, height=1)
         background.tk.call("lower", background._w)
-        self.contour_layers.append((background, parent, phase_offset, density, top_offset))
+        self.contour_layers.append((background, parent, phase_offset, density, top_offset, cover_padding))
         parent.bind("<Configure>", lambda _event: self.schedule_contour_redraw(), add="+")
         self.schedule_contour_redraw(delay_ms=1)
         return background
@@ -3096,25 +4132,15 @@ class FixerGui:
         status_wrap = self.theme_widget(tk.Frame(top_bar, bg=self.colors["bg"]), bg="bg")
         status_wrap.pack(side=tk.RIGHT, fill=tk.Y)
         LanguageSwitch(status_wrap, self).pack(side=tk.RIGHT, pady=(6, 0))
-        self.update_button = self.make_button(
-            status_wrap,
-            self.tr("check_update"),
-            command=lambda: self.start_update_check(manual=True),
-            bg=self.colors["soft_button"],
-            active=self.colors["soft_button_active"],
-            fg=self.colors["text"],
-            width=8,
-            bg_key="soft_button",
-            active_key="soft_button_active",
-            fg_key="text",
-        )
-        self.update_button.pack(side=tk.RIGHT, padx=(0, 10), pady=(6, 0))
+        self.settings_button = SettingsIconButton(status_wrap, self)
+        self.theme_widget(self.settings_button, bg="bg")
+        self.settings_button.pack(side=tk.RIGHT, padx=(0, 10), pady=(6, 0))
 
         content = self.theme_widget(tk.Frame(main, bg=self.colors["bg"]), bg="bg")
         content.pack(fill=tk.X, pady=(44, 0))
         self.attach_contour_background(content, phase_offset=1, density=0.62)
-        content.grid_columnconfigure(0, weight=58, minsize=630)
-        content.grid_columnconfigure(1, weight=50, minsize=520)
+        content.grid_columnconfigure(0, weight=58, minsize=650)
+        content.grid_columnconfigure(1, weight=50, minsize=560)
         content.grid_rowconfigure(0, weight=1)
 
         left_column = self.theme_widget(tk.Frame(content, bg=self.colors["bg"]), bg="bg")
@@ -3190,7 +4216,7 @@ class FixerGui:
             lambda event: self.target_hint_label.configure(wraplength=max(260, event.width)),
         )
 
-        options_shell = TechPanel(left_column, self.colors, padx=18, pady=14, min_height=242)
+        options_shell = TechPanel(left_column, self.colors, padx=18, pady=14, min_height=326)
         options_shell.pack(fill=tk.X)
         options_panel = options_shell.content
         self.options_header_label = self.tech_section_header(options_panel, "▧", self.tr("repair_title"), self.tr("repair_sub"))
@@ -3202,6 +4228,14 @@ class FixerGui:
             self.tr("stable_texture_desc"),
             self.colors,
         )
+        self.stable_offset_stepper = StableTextureOffsetStepper(
+            self.stable_texture_row,
+            self.stable_texture_offset,
+            self.colors,
+            lambda: self.tr("stable_offset_tooltip_title"),
+            lambda: self.tr("stable_offset_tooltip"),
+        )
+        self.stable_offset_stepper.pack(side=tk.RIGHT, padx=(4, 14), pady=10)
         self.stable_texture_row.pack(fill=tk.X, pady=(18, 1))
         self.fixmenu_row = TechOptionRow(
             options_panel,
@@ -3212,6 +4246,16 @@ class FixerGui:
             self.colors,
         )
         self.fixmenu_row.pack(fill=tk.X, pady=(1, 0))
+        self.wet_fix_row = TechOptionRow(
+            options_panel,
+            self.wet_fix,
+            "",
+            self.tr("wet_fix"),
+            self.tr("wet_fix_desc"),
+            self.colors,
+            icon_kind="wet",
+        )
+        self.wet_fix_row.pack(fill=tk.X, pady=(1, 0))
 
         task_shell = TechPanel(right_column, self.colors, padx=18, pady=14, min_height=432, stretch_content=True)
         task_shell.pack(fill=tk.BOTH, expand=True)
@@ -3220,14 +4264,36 @@ class FixerGui:
         task_cards = self.theme_widget(tk.Frame(task_panel, bg=self.colors["panel"]), bg="panel")
         task_cards.pack(fill=tk.BOTH, expand=True, pady=(18, 0))
         task_cards.grid_columnconfigure(0, weight=1)
-        for row in range(3):
-            task_cards.grid_rowconfigure(row, weight=1, uniform="task_cards")
+        task_cards.grid_rowconfigure(0, weight=0)
+        task_cards.grid_rowconfigure(1, weight=0)
+        task_cards.grid_rowconfigure(2, weight=0)
         self.fix_button = TechTaskCard(task_cards, self.colors, self.tr("fix_title"), self.tr("fix_tip"), "", "⚡", self.tr("fix_action"), lambda: self.run_fixer(dry_run=False))
-        self.fix_button.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
+        self.fix_button.configure(height=TASK_CARD_HEIGHT)
+        self.fix_button.grid(row=0, column=0, sticky="ew", pady=(0, TASK_CARD_GAP))
         self.preview_button = TechTaskCard(task_cards, self.colors, self.tr("preview_title"), self.tr("preview_tip"), "", "⌖", self.tr("preview_action"), lambda: self.run_fixer(dry_run=True))
-        self.preview_button.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
+        self.preview_button.configure(height=TASK_CARD_HEIGHT)
+        self.preview_button.grid(row=1, column=0, sticky="ew", pady=(0, TASK_CARD_GAP))
         self.rollback_button = TechTaskCard(task_cards, self.colors, self.tr("rollback_title"), self.tr("rollback_tip"), "", "◀", self.tr("rollback_action"), self.open_rollback_manager)
-        self.rollback_button.grid(row=2, column=0, sticky="nsew")
+        self.rollback_button.configure(height=TASK_CARD_HEIGHT)
+        self.rollback_button.grid(row=2, column=0, sticky="ew")
+
+        last_task_card_heights: list[tuple[int, int, int] | None] = [None]
+
+        def resize_task_cards(event: tk.Event[tk.Misc] | None = None) -> None:
+            available_height = int(event.height if event is not None else task_cards.winfo_height())
+            if available_height <= TASK_CARD_GAP * 2:
+                return
+            usable_height = available_height - TASK_CARD_GAP * 2
+            base_height, extra_pixels = divmod(usable_height, 3)
+            heights = tuple(base_height + (1 if index < extra_pixels else 0) for index in range(3))
+            if last_task_card_heights[0] == heights:
+                return
+            last_task_card_heights[0] = heights
+            for button, height in zip((self.fix_button, self.preview_button, self.rollback_button), heights):
+                button.configure(height=height)
+
+        task_cards.bind("<Configure>", resize_task_cards, add="+")
+        self.root.after_idle(resize_task_cards)
 
         self.log_shell = TechPanel(main, self.colors, padx=18, pady=12, min_height=1, fill_key="panel", stretch_content=True)
         self.log_shell.pack(fill=tk.X, expand=False, pady=(12, 0))
@@ -3877,16 +4943,232 @@ class FixerGui:
             return None
         return path
 
+    def ask_duplicate_mod_disable(
+        self,
+        groups: list[DuplicateModGroup],
+        root: Path,
+    ) -> list[DuplicateModEntry] | None:
+        window = tk.Toplevel(self.root)
+        window.title(self.tr("duplicate_mod_title"))
+        set_window_icon(window)
+        window.geometry("820x560")
+        window.minsize(680, 420)
+        window.configure(bg=self.colors["bg"])
+        window.transient(self.root)
+        window.grab_set()
+
+        selected_entries: list[DuplicateModEntry] | None = None
+        variables: dict[tuple[int, DuplicateModEntry], tk.BooleanVar] = {}
+
+        outer = self.theme_widget(tk.Frame(window, bg=self.colors["bg"], padx=18, pady=16), bg="bg")
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(
+            outer,
+            text=self.tr("duplicate_mod_title"),
+            bg=self.colors["bg"],
+            fg=self.colors["text"],
+            font=(UI_FONT_FAMILY, UI_TITLE_FONT_SIZE),
+            anchor="w",
+        ).pack(anchor="w")
+
+        message_label = tk.Label(
+            outer,
+            text=self.tr("duplicate_mod_message"),
+            bg=self.colors["bg"],
+            fg=self.colors["muted"],
+            font=(UI_FONT_FAMILY, UI_SMALL_FONT_SIZE),
+            justify=tk.LEFT,
+            anchor="w",
+            wraplength=760,
+        )
+        message_label.pack(fill=tk.X, pady=(8, 12))
+        message_label.bind("<Configure>", lambda event: message_label.configure(wraplength=max(260, event.width)))
+
+        list_shell = tk.Frame(outer, bg=self.colors["border"], padx=1, pady=1)
+        list_shell.pack(fill=tk.BOTH, expand=True)
+        canvas = tk.Canvas(list_shell, bg=self.colors["panel"], highlightthickness=0, bd=0)
+        scrollbar = tk.Scrollbar(list_shell, orient=tk.VERTICAL, command=canvas.yview)
+        content = tk.Frame(canvas, bg=self.colors["panel"])
+        canvas_window = canvas.create_window(0, 0, anchor="nw", window=content)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def sync_scroll_region(_event: tk.Event[tk.Misc] | None = None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def sync_canvas_width(event: tk.Event[tk.Misc]) -> None:
+            canvas.itemconfigure(canvas_window, width=event.width)
+
+        content.bind("<Configure>", sync_scroll_region)
+        canvas.bind("<Configure>", sync_canvas_width)
+
+        for group_index, group in enumerate(groups, start=1):
+            group_frame = tk.Frame(content, bg=self.colors["panel_2"], padx=12, pady=10)
+            group_frame.pack(fill=tk.X, padx=10, pady=(10, 0))
+            hash_preview = ", ".join(group.hash_values[:4])
+            if len(group.hash_values) > 4:
+                hash_preview += f" ... (+{len(group.hash_values) - 4})"
+            hash_label = tk.Label(
+                group_frame,
+                text=f"{group_index}. {self.tr('duplicate_mod_hash')}: {hash_preview}",
+                bg=self.colors["panel_2"],
+                fg=self.colors["accent"],
+                font=(UI_FONT_FAMILY, UI_SMALL_FONT_SIZE),
+                anchor="w",
+            )
+            hash_label.pack(fill=tk.X)
+
+            for entry in group.entries:
+                var = tk.BooleanVar(value=False)
+                variables[(group_index, entry)] = var
+                row = tk.Frame(group_frame, bg=self.colors["panel_2"])
+                row.pack(fill=tk.X, pady=(8, 0))
+                check = tk.Checkbutton(
+                    row,
+                    variable=var,
+                    bg=self.colors["panel_2"],
+                    fg=self.colors["text"],
+                    activebackground=self.colors["panel_2"],
+                    activeforeground=self.colors["text"],
+                    selectcolor=self.colors["panel"],
+                    cursor="hand2",
+                )
+                check.pack(side=tk.LEFT, padx=(0, 8), anchor="n")
+                detail = tk.Label(
+                    row,
+                    text=(
+                        f"{display_relpath(root, entry.mod_dir)}\n"
+                        f"{self.tr('duplicate_mod_main_ini')}: {display_relpath(root, entry.main_ini)}"
+                    ),
+                    bg=self.colors["panel_2"],
+                    fg=self.colors["text"],
+                    font=(UI_FONT_FAMILY, UI_SMALL_FONT_SIZE),
+                    justify=tk.LEFT,
+                    anchor="w",
+                    wraplength=620,
+                )
+                detail.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                detail.bind("<Configure>", lambda event, label=detail: label.configure(wraplength=max(240, event.width)))
+                for widget in (row, detail):
+                    widget.bind("<Button-1>", lambda _event, v=var: v.set(not v.get()))
+
+        button_row = tk.Frame(outer, bg=self.colors["bg"])
+        button_row.pack(fill=tk.X, pady=(14, 0))
+
+        def confirm() -> None:
+            nonlocal selected_entries
+            chosen_by_identity: dict[str, DuplicateModEntry] = {}
+            for group_index, group in enumerate(groups, start=1):
+                group_chosen = [
+                    entry
+                    for entry in group.entries
+                    if variables[(group_index, entry)].get()
+                ]
+                remaining = len(group.entries) - len(group_chosen)
+                if remaining != 1:
+                    messagebox.showwarning(
+                        self.tr("duplicate_mod_title"),
+                        self.tr("duplicate_mod_selection_required"),
+                        parent=window,
+                    )
+                    return
+                for entry in group_chosen:
+                    chosen_by_identity[fixer.path_identity(entry.mod_dir)] = entry
+            selected_entries = list(chosen_by_identity.values())
+            window.destroy()
+
+        def cancel() -> None:
+            nonlocal selected_entries
+            selected_entries = None
+            window.destroy()
+
+        self.make_button(
+            button_row,
+            self.tr("duplicate_mod_disable_selected"),
+            command=confirm,
+            bg=self.colors["green"],
+            active=self.colors["green_dark"],
+            fg="#101317",
+            width=18,
+        ).pack(side=tk.LEFT)
+        self.make_button(
+            button_row,
+            self.tr("duplicate_mod_cancel"),
+            command=cancel,
+            bg=self.colors["soft_button"],
+            active=self.colors["soft_button_active"],
+            fg=self.colors["text"],
+            width=12,
+        ).pack(side=tk.LEFT, padx=(10, 0))
+
+        window.protocol("WM_DELETE_WINDOW", cancel)
+        self.root.wait_window(window)
+        return selected_entries
+
+    def resolve_duplicate_mod_reuse(self, root: Path) -> bool:
+        duplicate_groups = scan_duplicate_mod_main_inis(root)
+        if not duplicate_groups:
+            return True
+
+        selected_entries = self.ask_duplicate_mod_disable(duplicate_groups, root)
+        if selected_entries is None:
+            self.log(self.tr("duplicate_mod_cancel_log"))
+            return False
+
+        disabled_lines: list[str] = []
+        errors: list[str] = []
+        for entry in selected_entries:
+            try:
+                target = disable_mod_folder(entry.mod_dir)
+            except OSError as exc:
+                errors.append(f"{display_relpath(root, entry.mod_dir)}: {exc}")
+                continue
+            disabled_lines.append(f"{display_relpath(root, entry.mod_dir)} -> {display_relpath(root, target)}")
+
+        if errors:
+            detail = "\n".join(errors)
+            messagebox.showerror(self.tr("duplicate_mod_disable_failed"), detail)
+            self.log(f"{self.tr('duplicate_mod_disable_failed')}:\n{detail}")
+            return False
+
+        if disabled_lines:
+            self.log(self.tr("duplicate_mod_disabled_log").format(count=len(disabled_lines)))
+            for line in disabled_lines:
+                self.log(f"  - {line}")
+        return True
+
+    def on_close(self) -> None:
+        if self.running:
+            messagebox.showwarning(self.tr("close_while_running_title"), self.tr("close_while_running_msg"))
+            return
+        self.save_settings_from_ui()
+        self.close_settings_window()
+        if self.backup_window is not None:
+            with contextlib.suppress(tk.TclError):
+                if not self.backup_window.winfo_exists():
+                    self.backup_window = None
+                else:
+                    self.backup_window.destroy()
+                    self.backup_window = None
+        self.root.destroy()
+
     def run_fixer(self, dry_run: bool = False) -> None:
         root = self.selected_root()
         if root is None or self.running:
             return
+        if not dry_run and not self.resolve_duplicate_mod_reuse(root):
+            return
 
         args = [str(root)]
+        args.extend(["--backup-limit", str(clamp_backup_retention_limit(self.backup_retention_limit.get()))])
         if dry_run:
             args.append("--dry-run")
         if self.fixmenu.get():
             args.append("--fixmenu")
+        if self.wet_fix.get():
+            args.append("--wet-fix")
         if self.include_disabled.get():
             args.append("--include-disabled")
         if self.force_new_version.get():
@@ -3894,7 +5176,15 @@ class FixerGui:
 
         stable_args: list[str] | None = None
         if self.stable_texture.get():
-            stable_args = [str(root)]
+            stable_args = [
+                str(root),
+                "--strategy",
+                "rabbitfx",
+                "--slot-offset",
+                str(self.stable_texture_offset.get()),
+            ]
+            if not self.stable_merge_same_resources.get():
+                stable_args.append("--no-merge-same-resources")
             if dry_run:
                 stable_args.append("--dry-run")
             if self.include_disabled.get():
@@ -3930,6 +5220,7 @@ class FixerGui:
             return
 
         args = [str(root), "--rollback", session_id]
+        args.extend(["--backup-limit", str(clamp_backup_retention_limit(self.backup_retention_limit.get()))])
         if before:
             args.append("--rollback-before")
 
@@ -3959,6 +5250,8 @@ class FixerGui:
         state = tk.DISABLED if running else tk.NORMAL
         for button in (self.fix_button, self.preview_button, self.rollback_button):
             button.configure(state=state)
+        if self.stable_offset_stepper is not None:
+            self.stable_offset_stepper.configure(state=state)
 
     def poll_log_queue(self) -> None:
         try:
@@ -4010,15 +5303,297 @@ class FixerGui:
         self.log("\n数据配置已刷新：GUI 会在下次运行时重新读取。")
         self.refresh_backup_list()
 
-    def open_rollback_manager(self) -> None:
+    def save_settings_from_ui(self) -> None:
+        if self.backup_retention_input is not None:
+            self.backup_retention_input.commit(invoke_command=False)
+        value = clamp_backup_retention_limit(self.backup_retention_limit.get())
+        self.backup_retention_limit.set(value)
+        self.user_settings["backup_retention_limit"] = value
+        self.user_settings["stable_merge_same_resources"] = bool(self.stable_merge_same_resources.get())
+        with contextlib.suppress(OSError):
+            save_user_settings(self.user_settings)
+
+    def close_settings_window(self) -> None:
+        with contextlib.suppress(tk.TclError):
+            self.save_settings_from_ui()
+        if self.settings_history_tooltip is not None:
+            self.settings_history_tooltip.hide()
+        if self.stable_merge_tooltip is not None:
+            self.stable_merge_tooltip.hide()
+        if self.settings_window is not None:
+            with contextlib.suppress(tk.TclError):
+                self.settings_window.destroy()
+        self.settings_window = None
+        self.settings_widgets = {}
+        self.backup_retention_stepper = None
+        self.backup_retention_input = None
+        self.stable_merge_switch = None
+        self.stable_merge_tooltip = None
+        self.settings_update_button = None
+        self.settings_history_button = None
+        self.settings_history_tooltip = None
+
+    def open_github_link(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        webbrowser.open(SECONDARY_UPDATE_REPO_URL, new=2)
+
+    def handle_settings_click(self, event: tk.Event[tk.Misc]) -> None:
+        if self.backup_retention_input is None:
+            return
+        if event.widget is self.backup_retention_input.entry:
+            return
+        self.backup_retention_input.commit()
+
+    def refresh_settings_window_language(self) -> None:
+        if self.settings_window is None:
+            return
+        with contextlib.suppress(tk.TclError):
+            if not self.settings_window.winfo_exists():
+                self.close_settings_window()
+                return
+            self.settings_window.title(self.tr("settings_window"))
+            mapping = {
+                "title": self.tr("settings_window"),
+                "backup_title": self.tr("backup_retention_title"),
+                "backup_desc": self.tr("backup_retention_desc"),
+                "backup_unit": self.tr("backup_retention_unit"),
+                "stable_merge_title": self.tr("stable_merge_title"),
+                "stable_merge_desc": self.tr("stable_merge_desc"),
+            }
+            for key, text in mapping.items():
+                widget = self.settings_widgets.get(key)
+                if widget is not None:
+                    widget.configure(text=text)
+            self.update_settings_text_wraps()
+            if self.stable_merge_switch is not None:
+                self.stable_merge_switch.set_labels(self.tr("stable_merge_on"), self.tr("stable_merge_off"))
+            if self.settings_update_button is not None:
+                self.settings_update_button.configure(text=self.tr("settings_check_update"))
+            if self.settings_history_button is not None:
+                self.settings_history_button.configure(text=self.tr("rollback_records"))
+
+    def update_settings_text_wraps(self) -> None:
+        for widget in self.settings_widgets.values():
+            source = getattr(widget, "_settings_wrap_source", None)
+            if source is None:
+                continue
+            try:
+                if not widget.winfo_exists() or not source.winfo_exists():
+                    continue
+                wrap = source.winfo_width()
+                if wrap <= 1:
+                    wrap = max(240, source.winfo_reqwidth())
+                widget.configure(wraplength=max(240, wrap - 2), justify=tk.LEFT)
+            except tk.TclError:
+                continue
+
+    def bind_settings_text_wrap(self, source: tk.Widget, *widgets: tk.Widget) -> None:
+        for widget in widgets:
+            widget._settings_wrap_source = source  # type: ignore[attr-defined]
+
+        source.bind("<Configure>", lambda _event: self.update_settings_text_wraps(), add="+")
+        source.after_idle(self.update_settings_text_wraps)
+
+    def open_settings(self) -> None:
+        if self.settings_window is not None and self.settings_window.winfo_exists():
+            self.settings_window.lift()
+            self.refresh_settings_window_language()
+            return
+
+        window = tk.Toplevel(self.root)
+        self.settings_window = window
+        window.title(self.tr("settings_window"))
+        set_window_icon(window)
+        window.geometry(f"{SETTINGS_WINDOW_WIDTH}x{SETTINGS_WINDOW_FALLBACK_HEIGHT}")
+        window.minsize(SETTINGS_WINDOW_WIDTH, SETTINGS_WINDOW_FALLBACK_HEIGHT)
+        window.configure(bg=self.colors["bg"])
+        window.protocol("WM_DELETE_WINDOW", self.close_settings_window)
+        window.bind("<Button-1>", self.handle_settings_click, add="+")
+
+        outer = self.theme_widget(tk.Frame(window, bg=self.colors["bg"], padx=18, pady=16), bg="bg")
+        outer.pack(fill=tk.BOTH, expand=True)
+        settings_background = self.attach_contour_background(outer, phase_offset=1, density=0.62, cover_padding=True)
+
+        shell = TechPanel(outer, self.colors, padx=18, pady=16, min_height=320, stretch_content=False)
+        shell.pack(fill=tk.X)
+        panel = shell.content
+
+        header = self.theme_widget(tk.Frame(panel, bg=self.colors["panel"]), bg="panel")
+        header.pack(fill=tk.X)
+        tk.Label(
+            header,
+            text="\u2699",
+            bg=self.colors["panel"],
+            fg=self.colors["accent"],
+            font=(SYMBOL_FONT_FAMILY, 20, "bold"),
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        title_label = self.theme_widget(tk.Label(
+            header,
+            text=self.tr("settings_window"),
+            bg=self.colors["panel"],
+            fg=self.colors["text"],
+            font=(UI_FONT_FAMILY, UI_TITLE_FONT_SIZE),
+        ), bg="panel", fg="text")
+        title_label.pack(side=tk.LEFT)
+
+        backup_row = self.theme_widget(tk.Frame(panel, bg=self.colors["panel_2"], padx=14, pady=12), bg="panel_2")
+        backup_row.pack(fill=tk.X, pady=(18, 12))
+        backup_row.grid_columnconfigure(0, weight=1)
+        text_area = self.theme_widget(tk.Frame(backup_row, bg=self.colors["panel_2"]), bg="panel_2")
+        text_area.grid(row=0, column=0, sticky="nsew")
+        backup_title = self.theme_widget(tk.Label(
+            text_area,
+            text=self.tr("backup_retention_title"),
+            bg=self.colors["panel_2"],
+            fg=self.colors["text"],
+            font=(UI_FONT_FAMILY, UI_SECTION_FONT_SIZE),
+            anchor="w",
+        ), bg="panel_2", fg="text")
+        backup_title.pack(anchor="w", fill=tk.X)
+        backup_desc = self.theme_widget(tk.Label(
+            text_area,
+            text=self.tr("backup_retention_desc"),
+            bg=self.colors["panel_2"],
+            fg=self.colors["muted"],
+            font=(UI_FONT_FAMILY, UI_SMALL_FONT_SIZE),
+            justify=tk.LEFT,
+            wraplength=330,
+            anchor="w",
+        ), bg="panel_2", fg="muted")
+        backup_desc.pack(anchor="w", fill=tk.X, pady=(6, 0))
+
+        value_area = self.theme_widget(tk.Frame(backup_row, bg=self.colors["panel_2"]), bg="panel_2")
+        value_area.grid(row=0, column=1, sticky="e", padx=(16, 0))
+        self.backup_retention_input = BackupRetentionLineInput(
+            value_area,
+            self.backup_retention_limit,
+            self.colors,
+            command=self.save_settings_from_ui,
+        )
+        self.backup_retention_input.pack(side=tk.LEFT)
+
+        merge_row = self.theme_widget(tk.Frame(panel, bg=self.colors["panel_2"], padx=14, pady=12), bg="panel_2")
+        merge_row.pack(fill=tk.X, pady=(0, 12))
+        merge_row.grid_columnconfigure(0, weight=1)
+        merge_text_area = self.theme_widget(tk.Frame(merge_row, bg=self.colors["panel_2"]), bg="panel_2")
+        merge_text_area.grid(row=0, column=0, sticky="nsew")
+        stable_merge_title = self.theme_widget(tk.Label(
+            merge_text_area,
+            text=self.tr("stable_merge_title"),
+            bg=self.colors["panel_2"],
+            fg=self.colors["text"],
+            font=(UI_FONT_FAMILY, UI_SECTION_FONT_SIZE),
+            anchor="w",
+        ), bg="panel_2", fg="text")
+        stable_merge_title.pack(anchor="w", fill=tk.X)
+        stable_merge_desc = self.theme_widget(tk.Label(
+            merge_text_area,
+            text=self.tr("stable_merge_desc"),
+            bg=self.colors["panel_2"],
+            fg=self.colors["muted"],
+            font=(UI_FONT_FAMILY, UI_SMALL_FONT_SIZE),
+            justify=tk.LEFT,
+            wraplength=330,
+            anchor="w",
+        ), bg="panel_2", fg="muted")
+        stable_merge_desc.pack(anchor="w", fill=tk.X, pady=(6, 0))
+
+        merge_value_area = self.theme_widget(tk.Frame(merge_row, bg=self.colors["panel_2"]), bg="panel_2")
+        merge_value_area.grid(row=0, column=1, sticky="e", padx=(16, 0))
+        self.stable_merge_switch = MergeModeSwitch(
+            merge_value_area,
+            self,
+            self.stable_merge_same_resources,
+            command=self.save_settings_from_ui,
+        )
+        self.stable_merge_switch.pack(side=tk.LEFT)
+        self.stable_merge_tooltip = WidgetTooltip(
+            self.stable_merge_switch,
+            lambda: self.colors,
+            lambda: self.tr("stable_merge_tooltip_title"),
+            lambda: self.tr("stable_merge_tooltip"),
+        )
+
+        action_row = self.theme_widget(tk.Frame(panel, bg=self.colors["panel"]), bg="panel")
+        action_row.pack(fill=tk.X, pady=(4, 0))
+        self.settings_update_button = self.make_button(
+            action_row,
+            self.tr("settings_check_update"),
+            command=lambda: self.start_update_check(manual=True),
+            bg=self.colors["soft_button"],
+            active=self.colors["soft_button_active"],
+            fg=self.colors["text"],
+            width=10,
+            bg_key="soft_button",
+            active_key="soft_button_active",
+            fg_key="text",
+        )
+        self.settings_update_button.pack(side=tk.LEFT)
+        self.settings_history_button = self.make_button(
+            action_row,
+            self.tr("rollback_records"),
+            command=lambda: self.open_rollback_manager(show_all=True),
+            bg=self.colors["soft_button"],
+            active=self.colors["soft_button_active"],
+            fg=self.colors["text"],
+            width=10,
+            bg_key="soft_button",
+            active_key="soft_button_active",
+            fg_key="text",
+        )
+        self.settings_history_button.pack(side=tk.LEFT, padx=(10, 0))
+        self.settings_history_tooltip = WidgetTooltip(
+            self.settings_history_button,
+            lambda: self.colors,
+            lambda: self.tr("rollback_records_tooltip_title"),
+            lambda: self.tr("rollback_records_tooltip"),
+        )
+
+        self.install_settings_author(settings_background)
+
+        self.settings_widgets = {
+            "title": title_label,
+            "backup_title": backup_title,
+            "backup_desc": backup_desc,
+            "stable_merge_title": stable_merge_title,
+            "stable_merge_desc": stable_merge_desc,
+        }
+        self.bind_settings_text_wrap(text_area, backup_title, backup_desc)
+        self.bind_settings_text_wrap(merge_text_area, stable_merge_title, stable_merge_desc)
+        window.update_idletasks()
+        self.update_settings_text_wraps()
+        author_height = UI_SMALL_FONT_SIZE + 5
+        author_item = getattr(settings_background, "_settings_author_item", None)
+        if author_item is not None:
+            author_bbox = settings_background.bbox(author_item)
+            if author_bbox is not None:
+                author_height = max(author_height, author_bbox[3] - author_bbox[1])
+        target_height = (
+            shell.winfo_y()
+            + shell.winfo_height()
+            + SETTINGS_AUTHOR_PANEL_GAP
+            + author_height
+            + SETTINGS_AUTHOR_BOTTOM_PADDING
+        )
+        target_height = max(SETTINGS_WINDOW_FALLBACK_HEIGHT, target_height)
+        window.minsize(SETTINGS_WINDOW_WIDTH, target_height)
+        window.geometry(f"{SETTINGS_WINDOW_WIDTH}x{target_height}")
+        window.update_idletasks()
+        self.redraw_contour_backgrounds()
+
+    def open_rollback_manager(self, show_all: bool = False) -> None:
         if self.backup_window is not None and self.backup_window.winfo_exists():
+            self.backup_window_show_all = show_all
+            title_key = "rollback_records" if show_all else "rollback_window"
+            self.backup_window.title(self.tr(title_key))
             self.backup_window.lift()
             self.refresh_backup_list()
             return
 
         window = tk.Toplevel(self.root)
         self.backup_window = window
-        window.title(self.tr("rollback_window"))
+        self.backup_window_show_all = show_all
+        title_key = "rollback_records" if show_all else "rollback_window"
+        window.title(self.tr(title_key))
         set_window_icon(window)
         window.geometry(f"{ROLLBACK_WINDOW_BASE_WIDTH}x{ROLLBACK_WINDOW_BASE_HEIGHT}")
         window.configure(bg=self.colors["bg"])
@@ -4092,6 +5667,11 @@ class FixerGui:
 
         self.refresh_backup_list()
 
+    def backup_visible_in_current_launch(self, session: Path) -> bool:
+        with contextlib.suppress(OSError):
+            return session.stat().st_mtime >= self.backup_display_started_at
+        return False
+
     def refresh_backup_list(self) -> None:
         if self.backup_list is None:
             return
@@ -4103,8 +5683,15 @@ class FixerGui:
         self.backup_list.delete(0, tk.END)
 
         sessions = fixer.list_backup_sessions(root)
+        if not self.backup_window_show_all:
+            sessions = [
+                session
+                for session in sessions
+                if self.backup_visible_in_current_launch(session)
+            ]
         if not sessions:
-            self.backup_list.insert(tk.END, "暂无备份")
+            empty_key = "backup_list_empty" if self.backup_window_show_all else "backup_list_current_empty"
+            self.backup_list.insert(tk.END, self.tr(empty_key))
             return
 
         for index, session in enumerate(sessions, start=1):
